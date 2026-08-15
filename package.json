@@ -1,0 +1,34 @@
+{
+  "name": "onramp-js",
+  "version": "0.1.0",
+  "description": "React Native frontend generator for the OnRamp Python app framework",
+  "author": "Cory Fitz",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/coryfitz/onramp-js.git"
+  },
+  "homepage": "https://github.com/coryfitz/onramp-js#readme",
+  "bugs": {
+    "url": "https://github.com/coryfitz/onramp-js/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "bin": {
+    "onramp-js": "bin/onramp-js.js"
+  },
+  "engines": {
+    "node": ">=20.19.4 <21"
+  },
+  "files": [
+    "bin",
+    "src",
+    "templates"
+  ],
+  "keywords": [
+    "onramp",
+    "react-native",
+    "react-strict-dom"
+  ]
+}
