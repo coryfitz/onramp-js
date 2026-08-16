@@ -2,6 +2,7 @@
 
 const path = require('path');
 const { createApp, npmPackageName } = require('../src/create');
+const { normalizePort } = require('../src/metro');
 const { addNativePlatforms } = require('../src/native');
 const { doctor, doctorWeb, repairFrontend, runFrontend } = require('../src/run');
 const packageJson = require('../package.json');
@@ -12,8 +13,8 @@ function printUsage() {
   onramp-js create --name <app-name> --output <directory> [--mobile | --all]
   onramp-js add <ios | android | mobile> [--output <directory>]
   onramp-js doctor [web | ios | android | mobile | all]
-  onramp-js run <web | ios | android> [--output <directory>]
-  onramp-js repair ios [--output <directory>]
+  onramp-js run <web | ios | android | mobile> [--output <directory>] [--metro-port <port>]
+  onramp-js repair ios [--output <directory>] [--fresh]
 
 Commands:
   create    Create a web-ready universal OnRamp app
@@ -25,6 +26,8 @@ Commands:
 Options:
   --mobile  Include both iOS and Android projects
   --all     Include every supported platform
+  --metro-port  Select a free port to use for the native Metro bundler
+  --fresh   Recreate Podfile.lock during an iOS repair
   --help    Show this help
   --version Show the onramp-js version`);
 }
@@ -117,7 +120,37 @@ function parseRunArgs(args) {
   const options = { platform, output: process.cwd() };
 
   if (!platform) {
-    throw new Error('Missing platform. Use web, ios, or android.');
+    throw new Error('Missing platform. Use web, ios, android, or mobile.');
+  }
+
+  for (let index = 0; index < args.length; index += 1) {
+    const argument = args[index];
+    if (argument === '--name' || argument === '--output' || argument === '--metro-port') {
+      const value = args[index + 1];
+      if (!value || value.startsWith('--')) {
+        throw new Error(`Missing value for ${argument}`);
+      }
+      if (argument === '--metro-port') {
+        options.metroPort = normalizePort(value);
+      } else {
+        options[argument.slice(2)] = value;
+      }
+      index += 1;
+      continue;
+    }
+    throw new Error(`Unknown option: ${argument}`);
+  }
+
+  options.output = path.resolve(options.output);
+  return options;
+}
+
+function parseRepairArgs(args) {
+  const platform = args.shift();
+  const options = { platform, output: process.cwd(), fresh: false };
+
+  if (!platform) {
+    throw new Error('Missing platform. Repair currently supports ios.');
   }
 
   for (let index = 0; index < args.length; index += 1) {
@@ -129,6 +162,10 @@ function parseRunArgs(args) {
       }
       options[argument.slice(2)] = value;
       index += 1;
+      continue;
+    }
+    if (argument === '--fresh') {
+      options.fresh = true;
       continue;
     }
     throw new Error(`Unknown option: ${argument}`);
@@ -183,14 +220,24 @@ async function main() {
   }
 
   if (command === 'repair') {
-    await repairFrontend(parseRunArgs(args));
+    await repairFrontend(parseRepairArgs(args));
     return;
   }
 
   throw new Error(`Unknown command: ${command}`);
 }
 
-main().catch(error => {
-  console.error(`onramp-js: ${error.message}`);
-  process.exitCode = 1;
-});
+if (require.main === module) {
+  main().catch(error => {
+    console.error(`onramp-js: ${error.message}`);
+    process.exitCode = 1;
+  });
+}
+
+module.exports = {
+  main,
+  parseAddArgs,
+  parseCreateArgs,
+  parseRepairArgs,
+  parseRunArgs,
+};

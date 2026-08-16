@@ -56,30 +56,68 @@ function requireFrontend(outputDir) {
   }
 }
 
-async function runFrontend({ platform, name, output }) {
+async function runMobile(options, runners = { runIos, runAndroid }) {
+  if (options.metroPort >= 65535) {
+    throw new Error('Mobile development requires two available Metro ports.');
+  }
+  let iosMetro;
+  try {
+    iosMetro = await runners.runIos({
+      name: options.name,
+      output: options.output,
+      metroPort: options.metroPort,
+    });
+    if (!iosMetro || !Number.isInteger(iosMetro.port)) {
+      throw new Error('The iOS Metro server did not report its port.');
+    }
+    if (iosMetro.port >= 65535) {
+      throw new Error('Mobile development requires two available Metro ports.');
+    }
+    const androidMetro = await runners.runAndroid({
+      name: options.name,
+      output: options.output,
+      metroStartingPort: iosMetro.port + 1,
+    });
+    return { android: androidMetro, ios: iosMetro };
+  } catch (error) {
+    if (iosMetro) {
+      iosMetro.stop('SIGTERM');
+    }
+    throw error;
+  }
+}
+
+async function runFrontend({ platform, name, output, metroPort }) {
   const outputDir = path.resolve(output || process.cwd());
   requireFrontend(outputDir);
   doctorWeb();
 
   if (platform === 'web') {
+    if (metroPort !== undefined) {
+      throw new Error('--metro-port is only valid for iOS, Android, or mobile runs.');
+    }
     run('npm', ['run', 'start:web'], outputDir);
     return;
   }
   if (platform === 'ios') {
-    await runIos({ name, output: outputDir });
+    await runIos({ name, output: outputDir, metroPort });
     return;
   }
   if (platform === 'android') {
-    await runAndroid({ name, output: outputDir });
+    await runAndroid({ name, output: outputDir, metroPort });
     return;
   }
-  throw new Error('Run platform must be web, ios, or android.');
+  if (platform === 'mobile') {
+    await runMobile({ name, output: outputDir, metroPort });
+    return;
+  }
+  throw new Error('Run platform must be web, ios, android, or mobile.');
 }
 
-async function repairFrontend({ platform, name, output }) {
+async function repairFrontend({ platform, name, output, fresh = false }) {
   doctorWeb();
   if (platform === 'ios') {
-    await repairIos({ name, output });
+    await repairIos({ name, output, fresh });
     return;
   }
   throw new Error('Repair platform must be ios.');
@@ -90,4 +128,5 @@ module.exports = {
   doctorWeb,
   repairFrontend,
   runFrontend,
+  runMobile,
 };

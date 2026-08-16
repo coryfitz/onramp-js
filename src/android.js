@@ -2,6 +2,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { addNativePlatforms } = require('./native');
+const { startMetro, warmMetroBundle } = require('./metro');
 const { capture, findExecutable, prependPath, run } = require('./process');
 
 function findAndroidSdk(env) {
@@ -170,14 +171,41 @@ function doctorAndroid() {
   return environment;
 }
 
-async function runAndroid({ name, output }) {
+async function runAndroid({ name, output, metroPort, metroStartingPort }) {
   const outputDir = path.resolve(output || process.cwd());
   console.log('Preparing Android development...');
   const environment = resolveAndroidEnvironment();
+  environment.env.ONRAMP_PLATFORM = 'android';
   await addNativePlatforms({ platform: 'android', name, output: outputDir });
+  const metro = await startMetro({
+    output: outputDir,
+    requestedPort: metroPort,
+    startingPort: metroStartingPort,
+    env: environment.env,
+  });
   console.log(`Using Node.js v${process.versions.node} environment`);
-  run('npm', ['run', 'android'], outputDir, environment.env);
-  wakeAndroidEmulators(environment.adb, environment.env);
+  console.log(`Using Metro port ${metro.port}`);
+  try {
+    await warmMetroBundle({ port: metro.port, platform: 'android' });
+    run(
+      'npx',
+      [
+        'react-native',
+        'run-android',
+        '--port',
+        String(metro.port),
+        '--no-packager',
+      ],
+      outputDir,
+      environment.env
+    );
+    wakeAndroidEmulators(environment.adb, environment.env);
+    console.log('Android app launched. Metro remains active; press Ctrl+C to stop.');
+    return metro;
+  } catch (error) {
+    metro.stop('SIGTERM');
+    throw error;
+  }
 }
 
 module.exports = {

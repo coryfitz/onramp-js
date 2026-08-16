@@ -1,7 +1,15 @@
 const fs = require('fs');
 const path = require('path');
-const { spawnSync } = require('child_process');
 const { addNativePlatforms } = require('./native');
+const { isPythonWrapper, run } = require('./process');
+
+function npmInstallArgs(pythonWrapper = false) {
+  const args = ['install', '--legacy-peer-deps'];
+  if (pythonWrapper) {
+    args.push('--no-audit', '--no-fund', '--loglevel=error');
+  }
+  return args;
+}
 
 function npmPackageName(value) {
   const normalized = value
@@ -14,28 +22,12 @@ function npmPackageName(value) {
   return normalized || 'app';
 }
 
-function run(command, args, cwd) {
-  console.log(`Running: ${command} ${args.join(' ')}`);
-  const result = spawnSync(command, args, {
-    cwd,
-    env: process.env,
-    shell: false,
-    stdio: 'inherit',
-  });
-
-  if (result.error) {
-    throw result.error;
-  }
-  if (result.status !== 0) {
-    throw new Error(`${command} exited with status ${result.status}`);
-  }
-}
-
 function writeJson(filePath, value) {
   fs.writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
 }
 
 function prepareOutputDirectory(outputDir) {
+  const existed = fs.existsSync(outputDir);
   if (fs.existsSync(outputDir)) {
     const entries = fs.readdirSync(outputDir);
     if (entries.length > 0) {
@@ -44,6 +36,7 @@ function prepareOutputDirectory(outputDir) {
   }
 
   fs.mkdirSync(outputDir, { recursive: true });
+  return existed;
 }
 
 function renderProjectMetadata(outputDir, appName) {
@@ -66,6 +59,42 @@ function renderProjectMetadata(outputDir, appName) {
   fs.writeFileSync(readmePath, readme, 'utf8');
 }
 
+function nextCommands(
+  outputDir,
+  platform,
+  pythonWrapper = false,
+  projectRootOverride = null
+) {
+  if (pythonWrapper) {
+    const projectRoot = projectRootOverride || path.dirname(outputDir);
+    return [
+      `cd ${projectRoot}`,
+      'onramp run      # Start web development',
+      'onramp ios      # Add, build, and launch iOS',
+      'onramp android  # Add, build, and launch Android',
+      'onramp mobile   # Add, build, and launch iOS + Android',
+      'onramp doctor ios',
+    ];
+  }
+
+  const commands = [
+    `cd ${outputDir}`,
+    'npm run start:native  # Start native development (Metro)',
+    'npm run start:web     # Start web development (Webpack)',
+    'npx onramp-js run android  # Run Android app',
+    'npx onramp-js run ios      # Run iOS app',
+    'npx onramp-js run mobile   # Run iOS and Android apps',
+  ];
+  if (platform === 'web') {
+    commands.push(
+      'npx onramp-js add ios',
+      'npx onramp-js add android',
+      'npx onramp-js add mobile'
+    );
+  }
+  return commands;
+}
+
 async function createApp({ name, output, platform = 'web' }) {
   const outputDir = path.resolve(output);
   const templatesDir = path.resolve(__dirname, '..', 'templates');
@@ -75,51 +104,53 @@ async function createApp({ name, output, platform = 'web' }) {
   }
 
   prepareOutputDirectory(outputDir);
-
-  console.log('Creating OnRamp frontend with file-based navigation...');
-  fs.cpSync(templatesDir, outputDir, { recursive: true });
-  fs.mkdirSync(path.join(outputDir, 'src', 'generated'), { recursive: true });
-  fs.copyFileSync(
-    path.join(outputDir, 'assets', 'logo.png'),
-    path.join(outputDir, 'logo.png')
-  );
-  renderProjectMetadata(outputDir, name);
-
   try {
-    run('npm', ['install', '--legacy-peer-deps'], outputDir);
-  } catch (error) {
-    console.error('Installation failed. Run this command manually:');
-    console.error(`  cd ${outputDir} && npm install --legacy-peer-deps`);
-    throw error;
-  }
+    console.log('Creating OnRamp frontend with file-based navigation...');
+    fs.cpSync(templatesDir, outputDir, { recursive: true });
+    fs.mkdirSync(path.join(outputDir, 'src', 'generated'), { recursive: true });
+    fs.copyFileSync(
+      path.join(outputDir, 'assets', 'logo.png'),
+      path.join(outputDir, 'logo.png')
+    );
+    renderProjectMetadata(outputDir, name);
 
-  try {
+    const pythonWrapper = isPythonWrapper();
+    console.log('Installing frontend dependencies...');
+    run(
+      'npm',
+      npmInstallArgs(pythonWrapper),
+      outputDir,
+      process.env,
+      { quiet: pythonWrapper }
+    );
+    console.log('✓ Frontend dependencies installed');
     run(process.execPath, ['scripts/build-routes.js'], outputDir);
-  } catch (error) {
-    console.warn('Could not generate the initial routes.');
-    throw error;
-  }
 
-  if (platform === 'mobile' || platform === 'all') {
-    await addNativePlatforms({ platform, name, output: outputDir });
+    if (platform === 'mobile' || platform === 'all') {
+      await addNativePlatforms({ platform, name, output: outputDir });
+    }
+  } catch (error) {
+    fs.rmSync(outputDir, { recursive: true, force: true });
+    console.error(`Frontend generation failed; removed incomplete output at ${outputDir}.`);
+    throw error;
   }
 
   console.log('\nOnRamp frontend created!');
   console.log('\nCommands:');
-  console.log(`  cd ${outputDir}`);
-  console.log('  npm run start:native  # Start native development (Metro)');
-  console.log('  npm run start:web     # Start web development (Webpack)');
-  console.log('  npm run android       # Run Android app');
-  console.log('  npm run ios           # Run iOS app');
-  if (platform === 'web') {
-    console.log('\nAdd native platforms later:');
-    console.log('  npx onramp-js add ios');
-    console.log('  npx onramp-js add android');
-    console.log('  npx onramp-js add mobile');
+  const commands = nextCommands(
+    outputDir,
+    platform,
+    process.env.ONRAMP_PYTHON_WRAPPER === '1',
+    process.env.ONRAMP_PROJECT_ROOT
+  );
+  for (const command of commands) {
+    console.log(`  ${command}`);
   }
 }
 
 module.exports = {
   createApp,
+  nextCommands,
+  npmInstallArgs,
   npmPackageName,
 };

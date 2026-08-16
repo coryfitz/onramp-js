@@ -2,21 +2,37 @@ const fs = require('fs');
 const path = require('path');
 const { spawnSync } = require('child_process');
 
-function run(command, args, cwd, env = process.env) {
-  console.log(`Running: ${command} ${args.join(' ')}`);
+function isPythonWrapper(env = process.env) {
+  return env.ONRAMP_PYTHON_WRAPPER === '1';
+}
+
+function run(command, args, cwd, env = process.env, options = {}) {
+  if (!isPythonWrapper(env)) {
+    console.log(`Running: ${command} ${args.join(' ')}`);
+  }
+  const quiet = options.quiet === true;
   const result = spawnSync(command, args, {
     cwd,
     env,
     shell: false,
-    stdio: 'inherit',
+    encoding: quiet ? 'utf8' : undefined,
+    stdio: quiet ? ['ignore', 'pipe', 'pipe'] : 'inherit',
   });
 
   if (result.error) {
     throw result.error;
   }
   if (result.status !== 0) {
-    throw new Error(`${command} exited with status ${result.status}`);
+    const label = isPythonWrapper(env) ? 'Frontend command' : command;
+    const detail = quiet
+      ? (result.stderr || result.stdout || '').trim()
+      : '';
+    throw new Error(
+      `${label} exited with status ${result.status}`
+      + `${detail ? `: ${detail}` : ''}`
+    );
   }
+  return result;
 }
 
 function capture(command, args, options = {}) {
@@ -84,6 +100,7 @@ function prependPath(env, ...directories) {
 module.exports = {
   capture,
   findExecutable,
+  isPythonWrapper,
   prependPath,
   run,
 };

@@ -3,9 +3,10 @@
   "version": "0.0.1",
   "private": true,
   "scripts": {
-    "android": "npx react-native run-android",
-    "ios": "npx react-native run-ios",
-    "start:native": "npx metro start --port 8081",
+    "android": "npx onramp-js run android",
+    "ios": "npx onramp-js run ios",
+    "mobile": "npx onramp-js run mobile",
+    "start:native": "node scripts/build-routes.js && npx metro start",
     "start:rn": "npx react-native start",
     "start:web": "node scripts/build-routes.js && webpack serve",
     "build:web": "node scripts/build-routes.js && webpack --mode production",

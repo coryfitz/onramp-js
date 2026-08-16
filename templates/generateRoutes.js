@@ -249,4 +249,31 @@ function generateRoutesConfig() {
   console.log(`Found ${routes.length} routes`);
 }
 
-module.exports = { generateRoutesConfig };
+function watchRoutesConfig() {
+  const chokidar = require('chokidar');
+  let regenerationTimer = null;
+  const watcher = chokidar.watch(
+    ['app/**/*.tsx', 'app/**/*.ts', 'app/**/*.jsx', 'app/**/*.js'],
+    {
+      ignored: /node_modules/,
+      ignoreInitial: true,
+      persistent: true,
+    }
+  );
+
+  const regenerate = (eventName, filePath) => {
+    if (!['add', 'unlink', 'addDir', 'unlinkDir'].includes(eventName)) {
+      return;
+    }
+    clearTimeout(regenerationTimer);
+    regenerationTimer = setTimeout(() => {
+      console.log(`[routes] ${eventName}: ${filePath}`);
+      generateRoutesConfig();
+    }, 50);
+  };
+
+  watcher.on('all', regenerate);
+  return watcher;
+}
+
+module.exports = { generateRoutesConfig, watchRoutesConfig };

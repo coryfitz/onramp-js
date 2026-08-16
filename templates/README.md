@@ -23,8 +23,20 @@ React Native app with React Strict DOM and file-based navigation.
     # Prepare and run native apps
     npx onramp-js run ios
     npx onramp-js run android
-    # Start Metro bundler with route generation
+    npx onramp-js run mobile
+    # Start Metro; routes are generated and watched automatically
     npm start
+
+Native runs choose a free Metro port beginning at 8081. To require a specific
+free port, pass `--metro-port 8082` to `onramp-js run ios` or Android.
+For `run mobile`, the requested port belongs to iOS and Android starts at the
+next available port above it.
+Each native launcher prepares its first complete bundle before opening the app
+so a new project's initial Metro build cannot time out in the simulator.
+The command remains attached to its Metro process; press Ctrl+C to stop it.
+
+The root app includes safe-area context. Keep screen content inside the
+generated safe-area provider or use `useSafeAreaInsets` for custom layouts.
 
 ## Setup Requirements
 
@@ -41,3 +53,6 @@ profile changes.
 
 `onramp-js run ios` installs Pods and selects a compatible simulator
 automatically.
+
+`npx onramp-js repair ios` preserves `Podfile.lock`. Add `--fresh` only when a
+new native dependency resolution is intentional.

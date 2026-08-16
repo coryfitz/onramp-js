@@ -56,7 +56,24 @@ Run the app directly through `onramp-js`:
 npx onramp-js run web
 npx onramp-js run ios
 npx onramp-js run android
+npx onramp-js run mobile
 ```
+
+Native runs select a free Metro port starting at 8081 instead of reusing an
+unidentified server from another project. Request a specific free port when
+needed:
+
+```sh
+npx onramp-js run ios --metro-port 8082
+```
+
+`run mobile` launches iOS and Android together. iOS uses the requested port,
+when provided, and Android selects the next available port above it.
+Each native launcher prepares its first complete Metro bundle before opening
+the app, avoiding cold-start bundle timeouts on newly generated projects.
+
+The run command stays attached to the Metro process after the app launches.
+Press Ctrl+C to stop that project-owned server cleanly.
 
 The native run commands add a missing platform automatically. The iOS command
 checks Xcode and CocoaPods, installs Pods, selects a compatible simulator, and
@@ -70,6 +87,18 @@ If an iOS dependency installation needs to be rebuilt:
 npx onramp-js repair ios
 ```
 
+The default repair preserves `Podfile.lock`. Add `--fresh` only when resolving
+a new native dependency lockfile is intentional.
+
+## Generated frontend behavior
+
+The generated `app/` directory contains file-based routes. Metro and Webpack
+regenerate `src/generated/routes.ts` when route files are added or removed;
+`npm run build:routes` remains available for deterministic checks.
+
+The generated root uses `SafeAreaProvider` and `SafeAreaView` so its first iOS
+screen respects device insets by default.
+
 ## OnRamp Python integration
 
 The Python framework uses the explicit form so its generated frontend remains
@@ -82,3 +111,12 @@ npx onramp-js create --name myapp --output /path/to/myapp/build
 Running `onramp ios` or `onramp android` delegates the complete frontend
 preparation and launch to these same `onramp-js` commands. Python remains
 responsible for its backend and for coordinating the frontend process with it.
+When the Python wrapper invokes creation, command suggestions use the parent
+`onramp` interface and keep developers at the generated project root. It also
+hides internal raw command descriptions; standalone `onramp-js` retains them.
+
+## Tests
+
+```sh
+npm test
+```

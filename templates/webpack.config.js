@@ -1,5 +1,16 @@
 const path = require('path');
 const HtmlWebpackPlugin = require('html-webpack-plugin');
+const { generateRoutesConfig } = require('./generateRoutes');
+
+process.env.ONRAMP_PLATFORM = 'web';
+generateRoutesConfig();
+
+class OnRampRoutesPlugin {
+  apply(compiler) {
+    compiler.hooks.beforeRun.tap('OnRampRoutesPlugin', generateRoutesConfig);
+    compiler.hooks.watchRun.tap('OnRampRoutesPlugin', generateRoutesConfig);
+  }
+}
 
 module.exports = {
   entry: './index.web.js',
@@ -8,6 +19,7 @@ module.exports = {
     port: 'auto',
     historyApiFallback: true,
     static: { directory: path.join(__dirname, 'assets') },
+    watchFiles: ['app/**/*'],
   },
   module: {
     rules: [
@@ -71,6 +83,9 @@ module.exports = {
     extensions: ['.web.js','.web.jsx','.web.ts','.web.tsx','.js','.jsx','.ts','.tsx'],
     alias: { 'react-native$': 'react-strict-dom' }
   },
-  plugins: [ new HtmlWebpackPlugin({ template: 'index.html', inject: true }) ],
+  plugins: [
+    new OnRampRoutesPlugin(),
+    new HtmlWebpackPlugin({ template: 'index.html', inject: true }),
+  ],
   output: { path: path.resolve(__dirname, 'dist'), filename: 'bundle.js', publicPath: '/' }
 };

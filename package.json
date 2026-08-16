@@ -1,6 +1,6 @@
 {
   "name": "onramp-js",
-  "version": "0.2.0",
+  "version": "0.3.1",
   "description": "Web-first universal React Native app generator for web, iOS, and Android",
   "author": "Cory Fitz",
   "license": "MIT",
@@ -17,6 +17,9 @@
   },
   "bin": {
     "onramp-js": "bin/onramp-js.js"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.js"
   },
   "engines": {
     "node": ">=20.19.4 <21"

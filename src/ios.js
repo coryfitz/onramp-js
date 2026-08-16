@@ -2,6 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const readline = require('readline/promises');
 const { addNativePlatforms } = require('./native');
+const { startMetro, warmMetroBundle } = require('./metro');
 const { capture, findExecutable, run } = require('./process');
 
 function requireDarwin() {
@@ -133,7 +134,34 @@ function applyFmtAppleClangWorkaround(iosDir, environment) {
   console.log(`✓ Applied the React Native fmt adjustment for Apple Clang ${clangMajor}`);
 }
 
-function ensureIosPods(iosDir, environment) {
+function iosPodsAreCurrent(iosDir, outputDir = path.dirname(iosDir)) {
+  const lockfile = path.join(iosDir, 'Podfile.lock');
+  const manifest = path.join(iosDir, 'Pods', 'Manifest.lock');
+  if (!fs.existsSync(lockfile) || !fs.existsSync(manifest)) {
+    return false;
+  }
+  if (fs.readFileSync(lockfile, 'utf8') !== fs.readFileSync(manifest, 'utf8')) {
+    return false;
+  }
+
+  const manifestTime = fs.statSync(manifest).mtimeMs;
+  const dependencyInputs = [
+    path.join(iosDir, 'Podfile'),
+    path.join(outputDir, 'package.json'),
+    path.join(outputDir, 'package-lock.json'),
+  ].filter(filePath => fs.existsSync(filePath));
+  return dependencyInputs.every(
+    filePath => fs.statSync(filePath).mtimeMs <= manifestTime
+  );
+}
+
+function ensureIosPods(iosDir, environment, options = {}) {
+  const outputDir = options.outputDir || path.dirname(iosDir);
+  if (!options.force && iosPodsAreCurrent(iosDir, outputDir)) {
+    console.log('✓ iOS Pods are current');
+    applyFmtAppleClangWorkaround(iosDir, environment);
+    return;
+  }
   console.log('Ensuring iOS dependencies (Pods)...');
   run(environment.pod, ['install'], iosDir, environment.env);
   applyFmtAppleClangWorkaround(iosDir, environment);
@@ -308,10 +336,82 @@ function nativeAppName(outputDir) {
   return appJson.name;
 }
 
-async function runIos({ name, output }) {
+function parseBuildSetting(output, setting) {
+  const expression = new RegExp(`^\\s*${setting}\\s*=\\s*(.+?)\\s*$`, 'm');
+  const match = output.match(expression);
+  return match ? match[1] : null;
+}
+
+function iosBundleIdentifier(
+  iosDir,
+  nativeName,
+  simulatorId,
+  environment
+) {
+  const container = iosBuildContainer(iosDir, nativeName);
+  if (!container) {
+    throw new Error('Could not locate the iOS workspace or project.');
+  }
+  const settings = capture(
+    environment.xcodebuild,
+    [
+      ...container,
+      '-scheme',
+      nativeName,
+      '-configuration',
+      'Debug',
+      '-destination',
+      `id=${simulatorId}`,
+      '-showBuildSettings',
+    ],
+    { cwd: iosDir, env: environment.env }
+  );
+  const identifier = parseBuildSetting(
+    settings.stdout,
+    'PRODUCT_BUNDLE_IDENTIFIER'
+  );
+  if (!identifier) {
+    throw new Error('Xcode did not report an iOS product bundle identifier.');
+  }
+  return identifier;
+}
+
+function iosJsLocation(metroPort) {
+  return `localhost:${metroPort}`;
+}
+
+function launchIosWithMetro(
+  simulatorId,
+  bundleIdentifier,
+  metroPort,
+  environment
+) {
+  // RCTBundleURLProvider expects a host (and optional port), not a full URL.
+  // Supplying http:// here causes React Native to construct http://http://...
+  // and silently fall back to its default Metro port.
+  const jsLocation = iosJsLocation(metroPort);
+  console.log(`Binding ${bundleIdentifier} to Metro at ${jsLocation}`);
+  run(
+    environment.xcrun,
+    [
+      'simctl',
+      'launch',
+      '--terminate-running-process',
+      simulatorId,
+      bundleIdentifier,
+      '-RCT_jsLocation',
+      jsLocation,
+    ],
+    undefined,
+    environment.env
+  );
+}
+
+async function runIos({ name, output, metroPort }) {
   const outputDir = path.resolve(output || process.cwd());
   console.log('Preparing iOS development...');
   const environment = doctorIos();
+  environment.env.ONRAMP_PLATFORM = 'ios';
 
   if (environment.version.number > 0 && environment.version.number < 16.1) {
     console.log('Warning: React Native 0.81.x works best with Xcode 16.1 or later.');
@@ -324,7 +424,7 @@ async function runIos({ name, output }) {
   await addNativePlatforms({ platform: 'ios', name, output: outputDir });
   const iosDir = path.join(outputDir, 'ios');
   ensureXcodeComponents(environment, iosDir);
-  ensureIosPods(iosDir, environment);
+  ensureIosPods(iosDir, environment, { outputDir });
   console.log('Checking for an eligible iOS simulator...');
   const nativeName = nativeAppName(outputDir);
   const simulator = await ensureEligibleIosSimulator(
@@ -332,16 +432,50 @@ async function runIos({ name, output }) {
     nativeName,
     environment
   );
-  console.log('Starting iOS simulator...');
-  run(
-    'npx',
-    ['react-native', 'run-ios', '--udid', simulator.id],
-    outputDir,
-    environment.env
+  const bundleIdentifier = iosBundleIdentifier(
+    iosDir,
+    nativeName,
+    simulator.id,
+    environment
   );
+  const metro = await startMetro({
+    output: outputDir,
+    requestedPort: metroPort,
+    env: environment.env,
+  });
+  console.log(`Using Metro port ${metro.port}`);
+  console.log('Starting iOS simulator...');
+  try {
+    await warmMetroBundle({ port: metro.port, platform: 'ios' });
+    run(
+      'npx',
+      [
+        'react-native',
+        'run-ios',
+        '--udid',
+        simulator.id,
+        '--port',
+        String(metro.port),
+        '--no-packager',
+      ],
+      outputDir,
+      environment.env
+    );
+    launchIosWithMetro(
+      simulator.id,
+      bundleIdentifier,
+      metro.port,
+      environment
+    );
+    console.log('iOS app launched. Metro remains active; press Ctrl+C to stop.');
+    return metro;
+  } catch (error) {
+    metro.stop('SIGTERM');
+    throw error;
+  }
 }
 
-async function repairIos({ name, output }) {
+async function repairIos({ name, output, fresh = false }) {
   const outputDir = path.resolve(output || process.cwd());
   console.log('Repairing iOS development files...');
   const environment = doctorIos();
@@ -362,14 +496,24 @@ async function repairIos({ name, output }) {
   }
 
   fs.rmSync(path.join(iosDir, 'Pods'), { recursive: true, force: true });
-  fs.rmSync(path.join(iosDir, 'Podfile.lock'), { force: true });
-  ensureIosPods(iosDir, environment);
+  if (fresh) {
+    fs.rmSync(path.join(iosDir, 'Podfile.lock'), { force: true });
+    console.log('Removed Podfile.lock because --fresh was requested.');
+  } else {
+    console.log('Preserving Podfile.lock.');
+  }
+  ensureIosPods(iosDir, environment, { force: true, outputDir });
   console.log('✓ iOS project repaired');
 }
 
 module.exports = {
   doctorIos,
   ensureEligibleIosSimulator,
+  iosBundleIdentifier,
+  iosJsLocation,
+  iosPodsAreCurrent,
+  launchIosWithMetro,
+  parseBuildSetting,
   repairIos,
   runIos,
 };
