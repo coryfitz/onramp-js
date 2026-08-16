@@ -16,7 +16,7 @@ const {
 } = require('../src/ios');
 const { nativeProjectName } = require('../src/native');
 const { isPythonWrapper, run } = require('../src/process');
-const { runMobile } = require('../src/run');
+const { runMobile, runWeb } = require('../src/run');
 
 test('parses a native Metro port separately from the output directory', () => {
   const options = parseRunArgs([
@@ -122,6 +122,17 @@ test('standalone onramp-js retains raw command descriptions', () => {
 
   assert.equal(messages.length, 1);
   assert.match(messages[0], /^Running: /);
+});
+
+test('web development opens the selected local server in a browser', () => {
+  const calls = [];
+  runWeb('/tmp/example', (...args) => calls.push(args));
+
+  assert.deepEqual(calls, [[
+    'npm',
+    ['run', 'start:web', '--', '--open'],
+    '/tmp/example',
+  ]]);
 });
 
 test('mobile runs iOS and Android on distinct Metro ports', async () => {

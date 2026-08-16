@@ -56,6 +56,10 @@ function requireFrontend(outputDir) {
   }
 }
 
+function runWeb(outputDir, runner = run) {
+  runner('npm', ['run', 'start:web', '--', '--open'], outputDir);
+}
+
 async function runMobile(options, runners = { runIos, runAndroid }) {
   if (options.metroPort >= 65535) {
     throw new Error('Mobile development requires two available Metro ports.');
@@ -96,7 +100,7 @@ async function runFrontend({ platform, name, output, metroPort }) {
     if (metroPort !== undefined) {
       throw new Error('--metro-port is only valid for iOS, Android, or mobile runs.');
     }
-    run('npm', ['run', 'start:web'], outputDir);
+    runWeb(outputDir);
     return;
   }
   if (platform === 'ios') {
@@ -129,4 +133,5 @@ module.exports = {
   repairFrontend,
   runFrontend,
   runMobile,
+  runWeb,
 };

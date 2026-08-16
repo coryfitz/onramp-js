@@ -80,7 +80,7 @@ function nextCommands(
   const commands = [
     `cd ${outputDir}`,
     'npm run start:native  # Start native development (Metro)',
-    'npm run start:web     # Start web development (Webpack)',
+    'npx onramp-js run web      # Start web development (Webpack)',
     'npx onramp-js run android  # Run Android app',
     'npx onramp-js run ios      # Run iOS app',
     'npx onramp-js run mobile   # Run iOS and Android apps',

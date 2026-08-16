@@ -13,7 +13,7 @@ React Native app with React Strict DOM and file-based navigation.
     # Generate routes from file structure
     npm run build:routes
     # Run on the web
-    npm run web
+    npx onramp-js run web
     # Add native projects only when needed
     npx onramp-js add ios
     npx onramp-js add android
