@@ -1,7 +1,7 @@
 {
   "name": "onramp-js",
-  "version": "0.1.0",
-  "description": "React Native frontend generator for the OnRamp Python app framework",
+  "version": "0.2.0",
+  "description": "Web-first universal React Native app generator for web, iOS, and Android",
   "author": "Cory Fitz",
   "license": "MIT",
   "repository": {
@@ -29,6 +29,8 @@
   "keywords": [
     "onramp",
     "react-native",
-    "react-strict-dom"
+    "react-strict-dom",
+    "universal-app",
+    "wora"
   ]
 }

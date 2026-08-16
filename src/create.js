@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const { spawnSync } = require('child_process');
+const { addNativePlatforms } = require('./native');
 
 function npmPackageName(value) {
   const normalized = value
@@ -65,7 +66,7 @@ function renderProjectMetadata(outputDir, appName) {
   fs.writeFileSync(readmePath, readme, 'utf8');
 }
 
-async function createApp({ name, output }) {
+async function createApp({ name, output, platform = 'web' }) {
   const outputDir = path.resolve(output);
   const templatesDir = path.resolve(__dirname, '..', 'templates');
 
@@ -99,6 +100,10 @@ async function createApp({ name, output }) {
     throw error;
   }
 
+  if (platform === 'mobile' || platform === 'all') {
+    await addNativePlatforms({ platform, name, output: outputDir });
+  }
+
   console.log('\nOnRamp frontend created!');
   console.log('\nCommands:');
   console.log(`  cd ${outputDir}`);
@@ -106,6 +111,12 @@ async function createApp({ name, output }) {
   console.log('  npm run start:web     # Start web development (Webpack)');
   console.log('  npm run android       # Run Android app');
   console.log('  npm run ios           # Run iOS app');
+  if (platform === 'web') {
+    console.log('\nAdd native platforms later:');
+    console.log('  npx onramp-js add ios');
+    console.log('  npx onramp-js add android');
+    console.log('  npx onramp-js add mobile');
+  }
 }
 
 module.exports = {
