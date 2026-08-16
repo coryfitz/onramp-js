@@ -1,4 +1,3 @@
-// scripts/build-routes.js
-const { generateRoutesConfig } = require('../generateRoutes');
+const { generateRoutesConfig } = require('onramp-js/routes');
 
 generateRoutesConfig();

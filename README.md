@@ -90,10 +90,29 @@ npx onramp-js repair ios
 The default repair preserves `Podfile.lock`. Add `--fresh` only when resolving
 a new native dependency lockfile is intentional.
 
+## Upgrade an existing frontend
+
+Generated projects record their frontend schema, package versions, and managed
+tooling hashes in `.onramp/project.json`. Preview or apply an upgrade with:
+
+```sh
+npx onramp-js upgrade --check
+npx onramp-js upgrade --dry-run
+npx onramp-js upgrade
+```
+
+The upgrader recognizes unmodified legacy templates, updates `package.json`
+without replacing application dependencies or scripts, installs the selected
+`onramp-js` version, and saves recoverable copies under `.onramp/backups/`.
+Modified managed files are reported as conflicts and are never overwritten.
+
 ## Generated frontend behavior
 
-The generated `app/` directory contains file-based routes. Metro and Webpack
-regenerate `src/generated/routes.ts` when route files are added or removed;
+The generated `app/` directory contains file-based routes. Route generation,
+the navigation provider, Metro defaults, Babel defaults, and Webpack defaults
+live in `onramp-js`; the generated configuration files are thin project-local
+entry points. Metro and Webpack regenerate `src/generated/routes.ts` when
+route files are added or removed;
 `npm run build:routes` remains available for deterministic checks.
 
 The generated root uses `SafeAreaProvider` and `SafeAreaView` so its first iOS

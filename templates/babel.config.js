@@ -1,5 +1,1 @@
-module.exports = {
-  // Metro (native) only
-  presets: ['module:@react-native/babel-preset'],
-  plugins: ['@stylexjs/babel-plugin'],
-};
+module.exports = require('onramp-js/babel');

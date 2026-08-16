@@ -1,7 +1,9 @@
 const fs = require('fs');
 const path = require('path');
 const { addNativePlatforms } = require('./native');
+const { writeFrontendManifest } = require('./project');
 const { isPythonWrapper, run } = require('./process');
+const onrampPackageJson = require('../package.json');
 
 function npmInstallArgs(pythonWrapper = false) {
   const args = ['install', '--legacy-peer-deps'];
@@ -44,9 +46,12 @@ function renderProjectMetadata(outputDir, appName) {
   const appJsonPath = path.join(outputDir, 'app.json');
   const readmePath = path.join(outputDir, 'README.md');
 
-  const packageJson = JSON.parse(fs.readFileSync(packagePath, 'utf8'));
-  packageJson.name = npmPackageName(appName);
-  writeJson(packagePath, packageJson);
+  const projectPackage = JSON.parse(fs.readFileSync(packagePath, 'utf8'));
+  projectPackage.name = npmPackageName(appName);
+  projectPackage.devDependencies['onramp-js'] = (
+    process.env.ONRAMP_JS_PACKAGE_SPEC || onrampPackageJson.version
+  );
+  writeJson(packagePath, projectPackage);
 
   const appJson = JSON.parse(fs.readFileSync(appJsonPath, 'utf8'));
   appJson.name = appName;
@@ -84,6 +89,7 @@ function nextCommands(
     'npx onramp-js run android  # Run Android app',
     'npx onramp-js run ios      # Run iOS app',
     'npx onramp-js run mobile   # Run iOS and Android apps',
+    'npx onramp-js upgrade --check  # Check framework tooling updates',
   ];
   if (platform === 'web') {
     commands.push(
@@ -125,6 +131,7 @@ async function createApp({ name, output, platform = 'web' }) {
     );
     console.log('✓ Frontend dependencies installed');
     run(process.execPath, ['scripts/build-routes.js'], outputDir);
+    writeFrontendManifest(outputDir);
 
     if (platform === 'mobile' || platform === 'all') {
       await addNativePlatforms({ platform, name, output: outputDir });

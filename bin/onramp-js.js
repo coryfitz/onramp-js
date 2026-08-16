@@ -5,6 +5,7 @@ const { createApp, npmPackageName } = require('../src/create');
 const { normalizePort } = require('../src/metro');
 const { addNativePlatforms } = require('../src/native');
 const { doctor, doctorWeb, repairFrontend, runFrontend } = require('../src/run');
+const { upgradeFrontend } = require('../src/upgrade');
 const packageJson = require('../package.json');
 
 function printUsage() {
@@ -15,6 +16,7 @@ function printUsage() {
   onramp-js doctor [web | ios | android | mobile | all]
   onramp-js run <web | ios | android | mobile> [--output <directory>] [--metro-port <port>]
   onramp-js repair ios [--output <directory>] [--fresh]
+  onramp-js upgrade [--output <directory>] [--check | --dry-run]
 
 Commands:
   create    Create a web-ready universal OnRamp app
@@ -22,12 +24,15 @@ Commands:
   doctor    Check the development tools for one or all platforms
   run       Prepare and run an app on the selected platform
   repair    Clean and restore platform dependencies
+  upgrade   Safely upgrade framework-owned frontend tooling
 
 Options:
   --mobile  Include both iOS and Android projects
   --all     Include every supported platform
   --metro-port  Select a free port to use for the native Metro bundler
   --fresh   Recreate Podfile.lock during an iOS repair
+  --check   Show whether a frontend upgrade can be applied safely
+  --dry-run Show the frontend upgrade plan without changing files
   --help    Show this help
   --version Show the onramp-js version`);
 }
@@ -175,6 +180,47 @@ function parseRepairArgs(args) {
   return options;
 }
 
+function parseUpgradeArgs(args) {
+  const options = {
+    output: process.cwd(),
+    check: false,
+    dryRun: false,
+    quiet: false,
+  };
+
+  for (let index = 0; index < args.length; index += 1) {
+    const argument = args[index];
+    if (argument === '--output') {
+      const value = args[index + 1];
+      if (!value || value.startsWith('--')) {
+        throw new Error('Missing value for --output');
+      }
+      options.output = value;
+      index += 1;
+      continue;
+    }
+    if (argument === '--check') {
+      options.check = true;
+      continue;
+    }
+    if (argument === '--dry-run') {
+      options.dryRun = true;
+      continue;
+    }
+    if (argument === '--quiet') {
+      options.quiet = true;
+      continue;
+    }
+    throw new Error(`Unknown option: ${argument}`);
+  }
+
+  if (options.check && options.dryRun) {
+    throw new Error('Use either --check or --dry-run, not both.');
+  }
+  options.output = path.resolve(options.output);
+  return options;
+}
+
 async function main() {
   const args = process.argv.slice(2);
   const command = args.shift();
@@ -224,6 +270,17 @@ async function main() {
     return;
   }
 
+  if (command === 'upgrade') {
+    const options = parseUpgradeArgs(args);
+    if (!options.quiet) {
+      doctorWeb();
+    }
+    if (!upgradeFrontend(options)) {
+      process.exitCode = 1;
+    }
+    return;
+  }
+
   throw new Error(`Unknown command: ${command}`);
 }
 
@@ -240,4 +297,5 @@ module.exports = {
   parseCreateArgs,
   parseRepairArgs,
   parseRunArgs,
+  parseUpgradeArgs,
 };

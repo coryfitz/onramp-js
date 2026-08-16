@@ -20,6 +20,9 @@ React Native app with React Strict DOM and file-based navigation.
     # Check platform development tools
     npx onramp-js doctor ios
     npx onramp-js doctor android
+    # Safely inspect or apply framework tooling upgrades
+    npx onramp-js upgrade --check
+    npx onramp-js upgrade
     # Prepare and run native apps
     npx onramp-js run ios
     npx onramp-js run android
@@ -37,6 +40,9 @@ The command remains attached to its Metro process; press Ctrl+C to stop it.
 
 The root app includes safe-area context. Keep screen content inside the
 generated safe-area provider or use `useSafeAreaInsets` for custom layouts.
+
+Frontend schema and managed tooling hashes are stored in
+`.onramp/project.json`. Upgrade backups are stored in `.onramp/backups/`.
 
 ## Setup Requirements
 

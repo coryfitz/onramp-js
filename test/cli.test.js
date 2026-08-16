@@ -7,6 +7,7 @@ const test = require('node:test');
 const {
   parseRepairArgs,
   parseRunArgs,
+  parseUpgradeArgs,
 } = require('../bin/onramp-js');
 const { nextCommands, npmInstallArgs } = require('../src/create');
 const {
@@ -37,6 +38,14 @@ test('parses mobile as a native run target', () => {
 
   assert.equal(options.platform, 'mobile');
   assert.equal(options.metroPort, 9090);
+});
+
+test('parses a non-mutating frontend upgrade check', () => {
+  const options = parseUpgradeArgs(['--output', '/tmp/example', '--check']);
+
+  assert.equal(options.output, '/tmp/example');
+  assert.equal(options.check, true);
+  assert.equal(options.dryRun, false);
 });
 
 test('iOS repair preserves the lock by default and exposes explicit fresh mode', () => {

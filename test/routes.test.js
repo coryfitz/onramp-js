@@ -4,7 +4,7 @@ const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
 
-const { generateRoutesConfig } = require('../templates/generateRoutes');
+const { generateRoutesConfig } = require('../src/routes');
 
 test('does not rewrite unchanged generated routes', t => {
   const originalCwd = process.cwd();
