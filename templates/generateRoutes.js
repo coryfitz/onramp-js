@@ -244,9 +244,14 @@ function generateRoutesConfig() {
       .join('\n') +
     `\n};\n`;
 
+  if (fs.existsSync(outFile) && fs.readFileSync(outFile, 'utf8') === file) {
+    return false;
+  }
+
   fs.writeFileSync(outFile, file, 'utf8');
   console.log(`Generated routes configuration at src/generated/routes.ts`);
   console.log(`Found ${routes.length} routes`);
+  return true;
 }
 
 function watchRoutesConfig() {
