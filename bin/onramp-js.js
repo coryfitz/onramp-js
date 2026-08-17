@@ -16,7 +16,7 @@ function printUsage() {
   onramp-js doctor [web | ios | android | mobile | all]
   onramp-js run <web | ios | android | mobile> [--output <directory>] [--metro-port <port>]
   onramp-js repair ios [--output <directory>] [--fresh]
-  onramp-js upgrade [--output <directory>] [--check | --dry-run]
+  onramp-js upgrade [--output <directory>] [--check]
 
 Commands:
   create    Create a web-ready universal OnRamp app
@@ -31,8 +31,7 @@ Options:
   --all     Include every supported platform
   --metro-port  Select a free port to use for the native Metro bundler
   --fresh   Recreate Podfile.lock during an iOS repair
-  --check   Show whether a frontend upgrade can be applied safely
-  --dry-run Show the frontend upgrade plan without changing files
+  --check   Preview the frontend upgrade and report whether it can succeed
   --help    Show this help
   --version Show the onramp-js version`);
 }
@@ -184,7 +183,6 @@ function parseUpgradeArgs(args) {
   const options = {
     output: process.cwd(),
     check: false,
-    dryRun: false,
     quiet: false,
   };
 
@@ -203,10 +201,6 @@ function parseUpgradeArgs(args) {
       options.check = true;
       continue;
     }
-    if (argument === '--dry-run') {
-      options.dryRun = true;
-      continue;
-    }
     if (argument === '--quiet') {
       options.quiet = true;
       continue;
@@ -214,9 +208,6 @@ function parseUpgradeArgs(args) {
     throw new Error(`Unknown option: ${argument}`);
   }
 
-  if (options.check && options.dryRun) {
-    throw new Error('Use either --check or --dry-run, not both.');
-  }
   options.output = path.resolve(options.output);
   return options;
 }

@@ -97,9 +97,11 @@ tooling hashes in `.onramp/project.json`. Preview or apply an upgrade with:
 
 ```sh
 npx onramp-js upgrade --check
-npx onramp-js upgrade --dry-run
 npx onramp-js upgrade
 ```
+
+`--check` prints the complete non-mutating upgrade plan and ends with a clear
+verdict explaining whether the upgrade should be successful.
 
 The upgrader recognizes unmodified legacy templates, updates `package.json`
 without replacing application dependencies or scripts, installs the selected

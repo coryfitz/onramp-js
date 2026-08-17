@@ -12,6 +12,7 @@ const {
 const {
   applyFrontendUpgrade,
   planFrontendUpgrade,
+  printFrontendCheckResult,
 } = require('../src/upgrade');
 
 const LEGACY_BABEL_CONFIG = `module.exports = {
@@ -103,7 +104,7 @@ test('applies a frontend upgrade with a recoverable backup', t => {
   assert.ok(fs.existsSync(path.join(backupDir, 'babel.config.js')));
   assert.equal(
     require(path.join(outputDir, 'package.json')).devDependencies['onramp-js'],
-    '0.4.0'
+    '0.4.1'
   );
 });
 
@@ -126,4 +127,19 @@ test('restores frontend files when dependency installation fails', t => {
     originalPackage
   );
   assert.equal(fs.existsSync(path.join(outputDir, FRONTEND_MANIFEST)), false);
+});
+
+test('upgrade check verdict clearly reports success or failure', () => {
+  const messages = [];
+  const originalLog = console.log;
+  console.log = message => messages.push(message);
+  try {
+    printFrontendCheckResult({ conflicts: [], changes: [{}], manifestChanged: true });
+    printFrontendCheckResult({ conflicts: ['conflict'], changes: [], manifestChanged: false });
+  } finally {
+    console.log = originalLog;
+  }
+
+  assert.match(messages[0], /should be successful/);
+  assert.match(messages[1], /will not be successful/);
 });

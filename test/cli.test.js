@@ -45,7 +45,13 @@ test('parses a non-mutating frontend upgrade check', () => {
 
   assert.equal(options.output, '/tmp/example');
   assert.equal(options.check, true);
-  assert.equal(options.dryRun, false);
+});
+
+test('rejects the removed dry-run upgrade option', () => {
+  assert.throws(
+    () => parseUpgradeArgs(['--dry-run']),
+    /Unknown option: --dry-run/
+  );
 });
 
 test('iOS repair preserves the lock by default and exposes explicit fresh mode', () => {

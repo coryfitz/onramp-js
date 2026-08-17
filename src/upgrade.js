@@ -169,6 +169,22 @@ function printFrontendPlan(plan) {
   }
 }
 
+function printFrontendCheckResult(plan) {
+  if (plan.conflicts.length) {
+    console.log(
+      '\n✗ Upgrade check failed: blocking issues were found; the frontend upgrade will not be successful until they are resolved.'
+    );
+    return;
+  }
+  if (!plan.changes.length && !plan.manifestChanged) {
+    console.log('\n✓ Upgrade check passed: the frontend is already up to date.');
+    return;
+  }
+  console.log(
+    '\n✓ Upgrade check passed: no blocking issues were found; the frontend upgrade should be successful.'
+  );
+}
+
 function createBackup(outputDir, relativePaths) {
   const timestamp = new Date().toISOString().replaceAll(':', '-');
   const backupDir = path.join(outputDir, '.onramp', 'backups', timestamp);
@@ -243,7 +259,7 @@ function applyFrontendUpgrade(plan, runner = run) {
 }
 
 function upgradeFrontend(
-  { output, dryRun = false, check = false, quiet = false },
+  { output, check = false, quiet = false },
   runner = run
 ) {
   const plan = planFrontendUpgrade(output);
@@ -251,9 +267,15 @@ function upgradeFrontend(
     printFrontendPlan(plan);
   }
   if (plan.conflicts.length) {
+    if (check && !isPythonWrapper()) {
+      printFrontendCheckResult(plan);
+    }
     return false;
   }
-  if (dryRun || check) {
+  if (check) {
+    if (!isPythonWrapper()) {
+      printFrontendCheckResult(plan);
+    }
     return true;
   }
   if (!plan.changes.length && !plan.manifestChanged) {
@@ -269,6 +291,7 @@ module.exports = {
   frontendMigrationSteps,
   LEGACY_MANAGED_HASHES,
   planFrontendUpgrade,
+  printFrontendCheckResult,
   printFrontendPlan,
   upgradeFrontend,
 };
