@@ -3,6 +3,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
+const packageJson = require('../package.json');
 
 const {
   FRONTEND_MANIFEST,
@@ -104,7 +105,7 @@ test('applies a frontend upgrade with a recoverable backup', t => {
   assert.ok(fs.existsSync(path.join(backupDir, 'babel.config.js')));
   assert.equal(
     require(path.join(outputDir, 'package.json')).devDependencies['onramp-js'],
-    '0.4.1'
+    packageJson.version
   );
 });
 

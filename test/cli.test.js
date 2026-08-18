@@ -11,9 +11,14 @@ const {
 } = require('../bin/onramp-js');
 const { nextCommands, npmInstallArgs } = require('../src/create');
 const {
+  ensureEligibleIosSimulator,
+  ensureIosSimulatorBooted,
   iosJsLocation,
   iosPodsAreCurrent,
+  parseAvailableIosSimulatorRuntimeVersions,
   parseBuildSetting,
+  queryEligibleIosSimulatorsWithRetry,
+  showIosSimulator,
 } = require('../src/ios');
 const { nativeProjectName } = require('../src/native');
 const { isPythonWrapper, run } = require('../src/process');
@@ -214,6 +219,197 @@ test('extracts the product bundle identifier from Xcode build settings', () => {
 
 test('passes Metro to React Native as a host and port', () => {
   assert.equal(iosJsLocation(8082), 'localhost:8082');
+});
+
+test('recognizes only available iOS simulator runtimes', () => {
+  const output = JSON.stringify({
+    runtimes: [
+      {
+        identifier: 'com.apple.CoreSimulator.SimRuntime.iOS-18-6',
+        isAvailable: true,
+        version: '18.6',
+      },
+      {
+        identifier: 'com.apple.CoreSimulator.SimRuntime.iOS-16-4',
+        isAvailable: false,
+        version: '16.4',
+      },
+      {
+        identifier: 'com.apple.CoreSimulator.SimRuntime.tvOS-26-0',
+        isAvailable: true,
+        version: '26.0',
+      },
+    ],
+  });
+
+  assert.deepEqual(
+    parseAvailableIosSimulatorRuntimeVersions(output),
+    ['18.6']
+  );
+});
+
+test('retries an empty Xcode simulator query after warming CoreSimulator', async () => {
+  const calls = [];
+  const destination = {
+    id: 'SIMULATOR-ID',
+    name: 'iPhone 16',
+    os: '18.6',
+  };
+  let queries = 0;
+  const result = await queryEligibleIosSimulatorsWithRetry(
+    '/tmp/example/ios',
+    'Example',
+    { env: {}, xcrun: 'xcrun' },
+    {
+      query: () => {
+        queries += 1;
+        return {
+          destinations: queries === 1 ? [] : [destination],
+          output: '',
+          status: 0,
+        };
+      },
+      warm: () => calls.push('warm'),
+      wait: milliseconds => {
+        calls.push(['wait', milliseconds]);
+        return Promise.resolve();
+      },
+    }
+  );
+
+  assert.equal(queries, 2);
+  assert.deepEqual(calls, ['warm', 'warm', ['wait', 500]]);
+  assert.deepEqual(result.destinations, [destination]);
+});
+
+test('does not offer a runtime download when iOS runtimes are installed', async () => {
+  let prompted = false;
+  await assert.rejects(
+    ensureEligibleIosSimulator(
+      '/tmp/example/ios',
+      'Example',
+      {env: {}, xcrun: 'xcrun'},
+      {
+        inspectRuntimes: () => ['18.6', '26.5'],
+        queryWithRetry: async () => ({
+          destinations: [],
+          output: '',
+          status: 0,
+        }),
+        promptYesNo: async () => {
+          prompted = true;
+          return false;
+        },
+      }
+    ),
+    /runtimes are installed \(18\.6, 26\.5\)/
+  );
+  assert.equal(prompted, false);
+});
+
+test('does not try to boot a simulator that is already booted', () => {
+  const calls = [];
+  const captureCommand = (_command, args) => {
+    calls.push(args);
+    if (args[1] === 'list') {
+      return {
+        status: 0,
+        stdout: JSON.stringify({
+          devices: {
+            runtime: [{udid: 'SIMULATOR-ID', state: 'Booted'}],
+          },
+        }),
+        stderr: '',
+      };
+    }
+    return {status: 0, stdout: '', stderr: ''};
+  };
+
+  ensureIosSimulatorBooted(
+    {id: 'SIMULATOR-ID', name: 'iPhone 16'},
+    {env: {}, xcrun: 'xcrun'},
+    captureCommand
+  );
+
+  assert.equal(calls.some(args => args[1] === 'boot'), false);
+  assert.equal(calls.some(args => args[1] === 'bootstatus'), true);
+});
+
+test('accepts a boot race when CoreSimulator already started the device', () => {
+  const calls = [];
+  let listed = 0;
+  const captureCommand = (_command, args) => {
+    calls.push(args);
+    if (args[1] === 'list') {
+      listed += 1;
+      return {
+        status: 0,
+        stdout: JSON.stringify({
+          devices: {
+            runtime: [{
+              udid: 'SIMULATOR-ID',
+              state: listed === 1 ? 'Shutdown' : 'Booted',
+            }],
+          },
+        }),
+        stderr: '',
+      };
+    }
+    if (args[1] === 'boot') {
+      return {
+        status: 149,
+        stdout: '',
+        stderr: 'Unable to boot device in current state: Booted',
+      };
+    }
+    return {status: 0, stdout: '', stderr: ''};
+  };
+
+  assert.doesNotThrow(() => ensureIosSimulatorBooted(
+    {id: 'SIMULATOR-ID', name: 'iPhone 16'},
+    {env: {}, xcrun: 'xcrun'},
+    captureCommand
+  ));
+  assert.equal(calls.some(args => args[1] === 'bootstatus'), true);
+});
+
+test('opens the selected simulator window and explicitly activates it', () => {
+  const calls = [];
+  const captureCommand = (command, args) => {
+    calls.push([command, args]);
+    if (args[0] === '-p') {
+      return {
+        status: 0,
+        stdout: '/Applications/Xcode.app/Contents/Developer\n',
+        stderr: '',
+      };
+    }
+    return {status: 0, stdout: '', stderr: ''};
+  };
+
+  showIosSimulator(
+    {id: 'SIMULATOR-ID', name: 'iPhone 16'},
+    {env: process.env, xcrun: 'xcrun'},
+    captureCommand,
+    candidate => candidate.endsWith('/Simulator.app')
+  );
+
+  assert.deepEqual(calls[1], [
+    'open',
+    [
+      '/Applications/Xcode.app/Contents/Developer/Applications/Simulator.app',
+      '--args',
+      '-CurrentDeviceUDID',
+      'SIMULATOR-ID',
+    ],
+  ]);
+  assert.deepEqual(calls[2], [
+    'osascript',
+    [
+      '-e',
+      'tell application id "com.apple.iphonesimulator" to activate',
+    ],
+  ]);
 });
 
 test('recognizes a current CocoaPods installation', t => {

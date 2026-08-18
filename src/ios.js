@@ -5,6 +5,9 @@ const { addNativePlatforms } = require('./native');
 const { startMetro, warmMetroBundle } = require('./metro');
 const { capture, findExecutable, run } = require('./process');
 
+const IOS_DESTINATION_QUERY_ATTEMPTS = 3;
+const IOS_DESTINATION_RETRY_DELAY_MS = 500;
+
 function requireDarwin() {
   if (process.platform !== 'darwin') {
     throw new Error('iOS development requires macOS.');
@@ -245,6 +248,74 @@ function queryEligibleIosSimulators(iosDir, nativeName, environment) {
   };
 }
 
+function parseAvailableIosSimulatorRuntimeVersions(output) {
+  const data = JSON.parse(output);
+  return (data.runtimes || [])
+    .filter(runtime => (
+      runtime.isAvailable === true
+      && typeof runtime.identifier === 'string'
+      && runtime.identifier.includes('.SimRuntime.iOS-')
+    ))
+    .map(runtime => runtime.version || runtime.name)
+    .filter(Boolean);
+}
+
+function availableIosSimulatorRuntimeVersions(environment) {
+  const result = capture(
+    environment.xcrun,
+    ['simctl', 'list', '--json', 'runtimes'],
+    { env: environment.env, check: false }
+  );
+  if (result.status !== 0) {
+    return null;
+  }
+  try {
+    return parseAvailableIosSimulatorRuntimeVersions(result.stdout);
+  } catch (_error) {
+    return null;
+  }
+}
+
+function warmCoreSimulator(environment) {
+  capture(
+    environment.xcrun,
+    ['simctl', 'list', '--json', 'devices', 'available'],
+    { env: environment.env, check: false }
+  );
+}
+
+function wait(milliseconds) {
+  return new Promise(resolve => setTimeout(resolve, milliseconds));
+}
+
+async function queryEligibleIosSimulatorsWithRetry(
+  iosDir,
+  nativeName,
+  environment,
+  options = {}
+) {
+  const attempts = options.attempts ?? IOS_DESTINATION_QUERY_ATTEMPTS;
+  const retryDelayMs = options.retryDelayMs ?? IOS_DESTINATION_RETRY_DELAY_MS;
+  const query = options.query || queryEligibleIosSimulators;
+  const warm = options.warm || warmCoreSimulator;
+  const waitForRetry = options.wait || wait;
+
+  warm(environment);
+  let result;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    result = query(iosDir, nativeName, environment);
+    if (result.destinations.length > 0 || attempt === attempts) {
+      return result;
+    }
+    if (attempt === 1) {
+      console.log('Xcode has not reported a simulator yet; checking again...');
+    }
+    warm(environment);
+    await waitForRetry(retryDelayMs);
+  }
+  return result;
+}
+
 function bootedIosSimulatorIds(environment) {
   try {
     const result = capture(
@@ -267,6 +338,137 @@ function bootedIosSimulatorIds(environment) {
   }
 }
 
+function parseIosSimulatorState(output, simulatorId) {
+  const data = JSON.parse(output);
+  for (const devices of Object.values(data.devices || {})) {
+    const simulator = devices.find(device => device.udid === simulatorId);
+    if (simulator) {
+      return simulator.state || null;
+    }
+  }
+  return null;
+}
+
+function iosSimulatorState(simulatorId, environment, captureCommand = capture) {
+  const result = captureCommand(
+    environment.xcrun,
+    ['simctl', 'list', '--json', 'devices'],
+    { env: environment.env, check: false }
+  );
+  if (result.status !== 0) {
+    return null;
+  }
+  try {
+    return parseIosSimulatorState(result.stdout, simulatorId);
+  } catch (_error) {
+    return null;
+  }
+}
+
+function ensureIosSimulatorBooted(
+  simulator,
+  environment,
+  captureCommand = capture
+) {
+  let state = iosSimulatorState(simulator.id, environment, captureCommand);
+  if (!state) {
+    throw new Error(`Could not find the selected iOS simulator (${simulator.id}).`);
+  }
+
+  if (state !== 'Booted' && state !== 'Booting') {
+    console.log(`Booting ${simulator.name}...`);
+    const boot = captureCommand(
+      environment.xcrun,
+      ['simctl', 'boot', simulator.id],
+      { env: environment.env, check: false }
+    );
+    if (boot.status !== 0) {
+      state = iosSimulatorState(simulator.id, environment, captureCommand);
+      if (state !== 'Booted' && state !== 'Booting') {
+        const detail = (boot.stderr || boot.stdout || '').trim();
+        throw new Error(
+          `Could not boot ${simulator.name}`
+          + `${detail ? `: ${detail}` : '.'}`
+        );
+      }
+    }
+  }
+
+  captureCommand(
+    environment.xcrun,
+    ['simctl', 'bootstatus', simulator.id, '-b'],
+    { env: environment.env }
+  );
+  console.log(`✓ ${simulator.name} is ready`);
+}
+
+function activateIosSimulator(environment, captureCommand = capture) {
+  const result = captureCommand(
+    'osascript',
+    [
+      '-e',
+      'tell application id "com.apple.iphonesimulator" to activate',
+    ],
+    { env: environment.env, check: false }
+  );
+  return result.status === 0;
+}
+
+function showIosSimulator(
+  simulator,
+  environment,
+  captureCommand = capture,
+  pathExists = fs.existsSync
+) {
+  const xcodeSelect = findExecutable('xcode-select', environment.env);
+  if (!xcodeSelect) {
+    throw new Error('xcode-select was not found on PATH.');
+  }
+  const developerDir = captureCommand(xcodeSelect, ['-p'], {
+    env: environment.env,
+  }).stdout.trim();
+  const simulatorApp = path.join(
+    developerDir,
+    'Applications',
+    'Simulator.app'
+  );
+  const deviceHubApp = path.join(
+    developerDir,
+    '..',
+    'Applications',
+    'DeviceHub.app'
+  );
+
+  let result;
+  if (pathExists(simulatorApp)) {
+    result = captureCommand(
+      'open',
+      [simulatorApp, '--args', '-CurrentDeviceUDID', simulator.id],
+      { env: environment.env, check: false }
+    );
+    if (result.status === 0) {
+      activateIosSimulator(environment, captureCommand);
+    }
+  } else if (pathExists(deviceHubApp)) {
+    result = captureCommand(
+      'open',
+      [`devices://device/open?id=${simulator.id}`],
+      { env: environment.env, check: false }
+    );
+  } else {
+    throw new Error('Could not locate Simulator.app or DeviceHub.app.');
+  }
+
+  if (result.status !== 0) {
+    const detail = (result.stderr || result.stdout || '').trim();
+    throw new Error(
+      'Could not open the iOS simulator window'
+      + `${detail ? `: ${detail}` : '.'}`
+    );
+  }
+  console.log(`✓ ${simulator.name} window opened`);
+}
+
 function selectIosSimulator(destinations, environment) {
   const booted = bootedIosSimulatorIds(environment);
   return destinations.find(destination => booted.has(destination.id))
@@ -275,8 +477,25 @@ function selectIosSimulator(destinations, environment) {
     || null;
 }
 
-async function ensureEligibleIosSimulator(iosDir, nativeName, environment) {
-  let query = queryEligibleIosSimulators(iosDir, nativeName, environment);
+async function ensureEligibleIosSimulator(
+  iosDir,
+  nativeName,
+  environment,
+  options = {}
+) {
+  const inspectRuntimes = (
+    options.inspectRuntimes || availableIosSimulatorRuntimeVersions
+  );
+  const queryWithRetry = (
+    options.queryWithRetry || queryEligibleIosSimulatorsWithRetry
+  );
+  const askToDownload = options.promptYesNo || promptYesNo;
+  const installedRuntimes = inspectRuntimes(environment);
+  let query = await queryWithRetry(
+    iosDir,
+    nativeName,
+    environment
+  );
   if (query.destinations.length > 0) {
     const selected = selectIosSimulator(query.destinations, environment);
     console.log(`Using ${selected.name} (iOS ${selected.os}, ${selected.id})`);
@@ -291,15 +510,28 @@ async function ensureEligibleIosSimulator(iosDir, nativeName, environment) {
     throw new Error('Xcode could not determine an eligible simulator for this app.');
   }
 
+  if (missingVersions.length === 0 && installedRuntimes === null) {
+    throw new Error(
+      'Xcode reported no eligible simulator, and OnRamp could not inspect the installed runtimes.'
+    );
+  }
+
+  if (missingVersions.length === 0 && installedRuntimes.length > 0) {
+    throw new Error(
+      'Xcode reported no eligible simulator even though iOS Simulator runtimes are installed '
+      + `(${installedRuntimes.join(', ')}). Open Simulator once, then run OnRamp again.`
+    );
+  }
+
   if (missingVersions.length > 0) {
     console.log(
       `The iOS Simulator runtime required by Xcode is missing (${[...new Set(missingVersions)].join(', ')}).`
     );
   } else {
-    console.log('No installed simulator is eligible for the generated app.');
+    console.log('No iOS Simulator runtime is installed.');
   }
 
-  const shouldDownload = await promptYesNo(
+  const shouldDownload = await askToDownload(
     'Download the compatible iOS Simulator runtime now? This can be several GB. (y/N): '
   );
   if (!shouldDownload) {
@@ -314,7 +546,11 @@ async function ensureEligibleIosSimulator(iosDir, nativeName, environment) {
     environment.env
   );
 
-  query = queryEligibleIosSimulators(iosDir, nativeName, environment);
+  query = await queryWithRetry(
+    iosDir,
+    nativeName,
+    environment
+  );
   if (query.destinations.length === 0) {
     throw new Error(
       'The runtime download completed, but Xcode still reports no eligible simulator.'
@@ -438,13 +674,15 @@ async function runIos({ name, output, metroPort }) {
     simulator.id,
     environment
   );
+  console.log('Starting iOS simulator...');
+  ensureIosSimulatorBooted(simulator, environment);
+  showIosSimulator(simulator, environment);
   const metro = await startMetro({
     output: outputDir,
     requestedPort: metroPort,
     env: environment.env,
   });
   console.log(`Using Metro port ${metro.port}`);
-  console.log('Starting iOS simulator...');
   try {
     await warmMetroBundle({ port: metro.port, platform: 'ios' });
     run(
@@ -467,6 +705,7 @@ async function runIos({ name, output, metroPort }) {
       metro.port,
       environment
     );
+    activateIosSimulator(environment);
     console.log('iOS app launched. Metro remains active; press Ctrl+C to stop.');
     return metro;
   } catch (error) {
@@ -507,13 +746,20 @@ async function repairIos({ name, output, fresh = false }) {
 }
 
 module.exports = {
+  activateIosSimulator,
+  availableIosSimulatorRuntimeVersions,
   doctorIos,
   ensureEligibleIosSimulator,
+  ensureIosSimulatorBooted,
   iosBundleIdentifier,
   iosJsLocation,
   iosPodsAreCurrent,
   launchIosWithMetro,
+  parseAvailableIosSimulatorRuntimeVersions,
   parseBuildSetting,
+  parseIosSimulatorState,
+  queryEligibleIosSimulatorsWithRetry,
   repairIos,
   runIos,
+  showIosSimulator,
 };
