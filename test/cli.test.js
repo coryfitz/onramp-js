@@ -13,11 +13,16 @@ const { nextCommands, npmInstallArgs } = require('../src/create');
 const {
   ensureEligibleIosSimulator,
   ensureIosSimulatorBooted,
+  ensurePreferredIosSimulatorRuntime,
   iosJsLocation,
   iosPodsAreCurrent,
+  parseAvailableIosSimulatorRuntimes,
   parseAvailableIosSimulatorRuntimeVersions,
   parseBuildSetting,
+  parsePreferredIosSimulatorRuntime,
+  prepareIosEnvironment,
   queryEligibleIosSimulatorsWithRetry,
+  selectIosSimulator,
   showIosSimulator,
 } = require('../src/ios');
 const { nativeProjectName } = require('../src/native');
@@ -255,6 +260,129 @@ test('recognizes only available iOS simulator runtimes', () => {
     parseAvailableIosSimulatorRuntimeVersions(output),
     ['18.6']
   );
+  assert.deepEqual(
+    parseAvailableIosSimulatorRuntimes(output),
+    [{
+      build: null,
+      identifier: 'com.apple.CoreSimulator.SimRuntime.iOS-18-6',
+      version: '18.6',
+    }]
+  );
+});
+
+test('reads Apple preferred iOS runtime build matching metadata', () => {
+  const preferred = parsePreferredIosSimulatorRuntime(JSON.stringify({
+    'appletvos26.5': {
+      chosenRuntimeBuild: '23L470',
+      platform: 'com.apple.platform.appletvos',
+      sdkVersion: '26.5',
+    },
+    'iphoneos26.5': {
+      chosenRuntimeBuild: '23F81a',
+      platform: 'com.apple.platform.iphoneos',
+      sdkVersion: '26.5.1',
+    },
+  }));
+
+  assert.deepEqual(preferred, {
+    build: '23F81a',
+    version: '26.5',
+  });
+});
+
+test('offers and downloads Apple preferred iOS runtime build', async () => {
+  const prompts = [];
+  const commands = [];
+  let inspections = 0;
+  const result = await ensurePreferredIosSimulatorRuntime(
+    { env: {}, xcodebuild: 'xcodebuild', xcrun: 'xcrun' },
+    {
+      cwd: '/tmp/example/ios',
+      inspectRuntimes: () => {
+        inspections += 1;
+        return inspections === 1
+          ? [{
+            build: '23F77',
+            identifier: 'old',
+            version: '26.5',
+          }]
+          : [{
+            build: '23F81a',
+            identifier: 'new',
+            version: '26.5',
+          }];
+      },
+      preferredRuntime: () => ({
+        build: '23F81a',
+        version: '26.5',
+      }),
+      promptYesNo: async question => {
+        prompts.push(question);
+        return true;
+      },
+      runCommand: (...args) => commands.push(args),
+      log: () => {},
+    }
+  );
+
+  assert.equal(result.changed, true);
+  assert.match(prompts[0], /newer iOS 26\.5.*23F81a.*23F77/);
+  assert.deepEqual(commands[0].slice(0, 3), [
+    'xcodebuild',
+    ['-downloadPlatform', 'iOS', '-buildVersion', '26.5'],
+    '/tmp/example/ios',
+  ]);
+});
+
+test('cancels iOS launch when runtime installation is declined', async () => {
+  await assert.rejects(
+    ensurePreferredIosSimulatorRuntime(
+      { env: {}, xcodebuild: 'xcodebuild', xcrun: 'xcrun' },
+      {
+        inspectRuntimes: () => [],
+        preferredRuntime: () => ({
+          build: '23F81a',
+          version: '26.5',
+        }),
+        promptYesNo: async () => false,
+        log: () => {},
+      }
+    ),
+    /no Simulator runtime is installed/
+  );
+});
+
+test('offers the Xcode App Store page when Simulator itself is missing', async () => {
+  const calls = [];
+  await assert.rejects(
+    prepareIosEnvironment({
+      doctor: () => {
+        throw new Error('Xcode command-line tools were not found.');
+      },
+      promptYesNo: async () => true,
+      captureCommand: (...args) => {
+        calls.push(args);
+        return { status: 0, stdout: '', stderr: '' };
+      },
+    }),
+    /Xcode page is open/
+  );
+  assert.deepEqual(calls[0][1], [
+    'macappstore://itunes.apple.com/app/id497799835',
+  ]);
+});
+
+test('selects a simulator on the newest installed iOS runtime', () => {
+  const selected = selectIosSimulator(
+    [
+      { id: 'OLD', name: 'iPhone 16', os: '18.6' },
+      { id: 'NEW', name: 'iPhone 17', os: '26.5' },
+    ],
+    { env: {}, xcrun: 'xcrun' },
+    new Set(['OLD'])
+  );
+
+  assert.equal(selected.id, 'NEW');
 });
 
 test('retries an empty Xcode simulator query after warming CoreSimulator', async () => {

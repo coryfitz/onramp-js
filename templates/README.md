@@ -48,17 +48,18 @@ Frontend schema and managed tooling hashes are stored in
 
 ### Android
 
-- Android Studio + Android SDK + JDK
+- JDK 17; OnRamp can offer to install the Android emulator SDK components
 
-`onramp-js run android` locates the SDK and JDK 17 without requiring shell
-profile changes.
+`onramp-js run android` checks Google's stable package list and asks before
+installing or upgrading the Emulator, system image, or reusable AVD.
 
 ### iOS (macOS only)
 
-- Xcode + iOS Simulator + CocoaPods
+- Xcode + CocoaPods
 
-`onramp-js run ios` installs Pods and selects a compatible simulator
-automatically.
+`onramp-js run ios` installs Pods, checks Apple's preferred compatible
+Simulator runtime, and asks before downloading a missing or newer runtime.
+Xcode supplies the Simulator application itself.
 
 `npx onramp-js repair ios` preserves `Podfile.lock`. Add `--fresh` only when a
 new native dependency resolution is intentional.

@@ -85,10 +85,23 @@ The run command stays attached to the Metro process after the app launches.
 Press Ctrl+C to stop that project-owned server cleanly.
 
 The native run commands add a missing platform automatically. The iOS command
-checks Xcode and CocoaPods, installs Pods, selects a compatible simulator, and
-offers to download a missing simulator runtime. The Android command locates
-the SDK, selects JDK 17 and an installed virtual device, then wakes and unlocks
-the emulator after launching the app.
+checks Xcode and CocoaPods, installs Pods, and asks Apple for the preferred
+runtime build on every launch. When that runtime is missing or newer than the
+installed build, OnRamp offers to download and install it through Xcode before
+selecting a simulator on the newest runtime. If Xcode itself is missing,
+OnRamp can open its Mac App Store page after asking; Apple still requires the
+user to complete the Xcode installation.
+
+The Android command checks Google's stable SDK package list on every launch.
+It offers to install or upgrade the Emulator package and to install the newest
+stable Google APIs system image and create a reusable AVD. If `sdkmanager` is
+missing or too old to run, OnRamp first offers to download verified current
+command-line tools from Google's repository. Every download and global SDK
+change requires confirmation. OnRamp then enables host clipboard sharing on
+macOS and cold-starts the selected emulator. The cold start bypasses stale
+Quick Boot state without wiping the virtual device's apps or data. Android
+Emulator 33.1.23 or newer is required for reliable host clipboard transport.
+Broken AVD entries and preview or codename images are not selected.
 
 If an iOS dependency installation needs to be rebuilt:
 
@@ -128,6 +141,10 @@ route files are added or removed;
 
 The generated root uses `SafeAreaProvider` and `SafeAreaView` so its first iOS
 screen respects device insets by default.
+
+On web, React Strict DOM `css.create` rules are injected into the page by the
+StyleX transform. Files placed in `assets/` are served by the development
+server and copied to the root of `dist/` by production builds.
 
 ## OnRamp Python integration
 

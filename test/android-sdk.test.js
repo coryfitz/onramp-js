@@ -1,0 +1,430 @@
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const test = require('node:test');
+
+const {
+  androidPackageNeedsUpdate,
+  parseAndroidCommandLineToolsPackage,
+  parseAndroidSdkPackages,
+  preferredAndroidSystemImage,
+} = require('../src/android-sdk');
+const { prepareAndroidEnvironment } = require('../src/android');
+const { capture } = require('../src/process');
+
+test('finds Google command-line tools for the current host repository', () => {
+  const xml = [
+    '<repository>',
+    '<remotePackage path="cmdline-tools;latest">',
+    '<revision><major>23</major><minor>0</minor></revision>',
+    '<archives>',
+    '<archive><complete><size>100</size><checksum>linuxsum</checksum>',
+    '<url>linux.zip</url></complete><host-os>linux</host-os></archive>',
+    '<archive><complete><size>200</size><checksum>macsum</checksum>',
+    '<url>mac.zip</url></complete><host-os>macosx</host-os></archive>',
+    '</archives>',
+    '</remotePackage>',
+    '</repository>',
+  ].join('');
+  const selected = parseAndroidCommandLineToolsPackage(xml, 'darwin');
+
+  assert.equal(selected.revision, '23.0');
+  assert.equal(selected.size, 200);
+  assert.equal(selected.checksum, 'macsum');
+  assert.equal(
+    selected.url,
+    'https://dl.google.com/android/repository/mac.zip'
+  );
+});
+
+test('parses installed, available, and updatable Android SDK packages', () => {
+  const packages = parseAndroidSdkPackages([
+    'Installed packages:',
+    '  Path | Version | Description | Location',
+    '  ------- | ------- | ------- | -------',
+    '  emulator | 36.2.1 | Android Emulator | emulator',
+    '  platform-tools | 36.0.0 | Android SDK Platform-Tools | platform-tools',
+    'Available Packages:',
+    '  Path | Version | Description',
+    '  ------- | ------- | -------',
+    '  system-images;android-36;google_apis;arm64-v8a | 10 | Image',
+    'Available Updates:',
+    '  ID | Installed | Available',
+    '  ------- | ------- | -------',
+    '  emulator | 36.2.1 | 37.1.11',
+  ].join('\n'));
+
+  assert.deepEqual(packages.get('emulator'), {
+    path: 'emulator',
+    installedVersion: '36.2.1',
+    availableVersion: '37.1.11',
+    description: 'Android Emulator',
+  });
+  assert.equal(androidPackageNeedsUpdate(packages.get('emulator')), true);
+});
+
+test('parses current Android CLI package output and canonicalizes images', () => {
+  const packages = parseAndroidSdkPackages([
+    'Installed packages:',
+    '  emulator                         32.1.11    ->   37.1.11  Android Emulator',
+    'Available packages:',
+    '  system-images/android-37.1/google_apis_ps16k/arm64-v8a  8.0.0  Google APIs Image',
+  ].join('\n'));
+
+  assert.deepEqual(packages.get('emulator'), {
+    path: 'emulator',
+    installedVersion: '32.1.11',
+    availableVersion: '37.1.11',
+    description: 'Android Emulator',
+  });
+  assert.deepEqual(
+    packages.get(
+      'system-images;android-37.1;google_apis_ps16k;arm64-v8a'
+    ),
+    {
+      path: 'system-images;android-37.1;google_apis_ps16k;arm64-v8a',
+      availableVersion: '8.0.0',
+      description: 'Google APIs Image',
+      installPath: (
+        'system-images/android-37.1/google_apis_ps16k/arm64-v8a'
+      ),
+    }
+  );
+});
+
+test('selects the newest stable Google APIs image for the host architecture', () => {
+  const packages = new Map([
+    [
+      'system-images;android-35;google_apis;arm64-v8a',
+      {
+        path: 'system-images;android-35;google_apis;arm64-v8a',
+        installedVersion: '9',
+      },
+    ],
+    [
+      'system-images;android-36-ext12;google_apis;arm64-v8a',
+      {
+        path: 'system-images;android-36-ext12;google_apis;arm64-v8a',
+        availableVersion: '3',
+      },
+    ],
+    [
+      'system-images;android-37;google_apis;x86_64',
+      {
+        path: 'system-images;android-37;google_apis;x86_64',
+        availableVersion: '1',
+      },
+    ],
+    [
+      'system-images;android-VanillaIceCream;google_apis;arm64-v8a',
+      {
+        path: 'system-images;android-VanillaIceCream;google_apis;arm64-v8a',
+        availableVersion: '1',
+      },
+    ],
+  ]);
+
+  const selected = preferredAndroidSystemImage(packages, 'arm64-v8a');
+  assert.equal(
+    selected.packageInfo.path,
+    'system-images;android-36-ext12;google_apis;arm64-v8a'
+  );
+});
+
+test('passes explicit input to native package tools', () => {
+  const result = capture(
+    process.execPath,
+    ['-e', "process.stdin.once('data', value => process.stdout.write(value))"],
+    { input: 'no\n' }
+  );
+  assert.equal(result.stdout, 'no\n');
+});
+
+test('offers and installs an available Android Emulator upgrade', async t => {
+  const temporary = fs.mkdtempSync(
+    path.join(os.tmpdir(), 'onramp-android-sdk-test-')
+  );
+  t.after(() => fs.rmSync(temporary, { recursive: true, force: true }));
+  const sdk = path.join(temporary, 'sdk');
+  const javaHome = path.join(temporary, 'jdk');
+  const avdHome = path.join(temporary, 'avd-home');
+  const commandExtension = process.platform === 'win32' ? '.bat' : '';
+  const emulatorExtension = process.platform === 'win32' ? '.exe' : '';
+  const sdkManager = path.join(
+    sdk,
+    'cmdline-tools',
+    'latest',
+    'bin',
+    'sdkmanager' + commandExtension
+  );
+  const emulator = path.join(
+    sdk,
+    'emulator',
+    'emulator' + emulatorExtension
+  );
+  const adb = path.join(
+    sdk,
+    'platform-tools',
+    'adb' + emulatorExtension
+  );
+  const avd = 'Pixel_API_35';
+  const avdDirectory = path.join(avdHome, avd + '.avd');
+  const architecture = os.arch() === 'arm64' ? 'arm64-v8a' : 'x86_64';
+  const imagePackage = [
+    'system-images',
+    'android-35',
+    'google_apis',
+    architecture,
+  ].join(';');
+  const imageRelative = imagePackage.replaceAll(';', path.sep) + path.sep;
+  const imageDirectory = path.join(sdk, imageRelative);
+
+  for (const filePath of [
+    sdkManager,
+    path.join(path.dirname(sdkManager), 'avdmanager' + commandExtension),
+    emulator,
+    adb,
+    path.join(javaHome, 'bin', 'java' + emulatorExtension),
+  ]) {
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, '');
+  }
+  fs.mkdirSync(imageDirectory, { recursive: true });
+  fs.mkdirSync(avdDirectory, { recursive: true });
+  fs.mkdirSync(avdHome, { recursive: true });
+  fs.writeFileSync(
+    path.join(avdHome, avd + '.ini'),
+    'path=' + avdDirectory + '\n'
+  );
+  fs.writeFileSync(
+    path.join(avdDirectory, 'config.ini'),
+    'image.sysdir.1=' + imageRelative + '\n'
+  );
+
+  const packageMap = new Map([
+    [
+      'emulator',
+      {
+        path: 'emulator',
+        installedVersion: '36.2.1',
+        availableVersion: '37.1.11',
+      },
+    ],
+    [
+      'platform-tools',
+      {
+        path: 'platform-tools',
+        installedVersion: '36.0.0',
+        availableVersion: '37.0.0',
+      },
+    ],
+    [
+      imagePackage,
+      {
+        path: imagePackage,
+        installedVersion: '10',
+      },
+    ],
+  ]);
+  const prompts = [];
+  const installs = [];
+  const environment = await prepareAndroidEnvironment({
+    sdk,
+    javaHome,
+    env: {
+      ANDROID_AVD_HOME: avdHome,
+      PATH: '',
+    },
+    captureFn: (command, args) => {
+      if (command === sdkManager && args[0] === '--version') {
+        return { status: 0, stdout: '23.0\n', stderr: '' };
+      }
+      if (command === emulator && args[0] === '-version') {
+        return {
+          status: 0,
+          stdout: 'Android emulator version 36.2.1.0\n',
+          stderr: '',
+        };
+      }
+      if (command === emulator && args[0] === '-list-avds') {
+        return { status: 0, stdout: avd + '\n', stderr: '' };
+      }
+      return { status: 0, stdout: '', stderr: '' };
+    },
+    listPackages: () => packageMap,
+    installPackages: (_manager, _sdk, _env, selected) => {
+      installs.push(selected);
+    },
+    promptYesNo: async question => {
+      prompts.push(question);
+      return true;
+    },
+    log: () => {},
+  });
+
+  assert.match(prompts[0], /37\.1\.11.*36\.2\.1.*Upgrade now/);
+  assert.deepEqual(installs, [['emulator']]);
+  assert.equal(environment.avd, avd);
+  assert.equal(
+    prompts.some(question => question.includes('Platform-Tools')),
+    false
+  );
+});
+
+test('offers to install a missing Android emulator, image, and AVD', async t => {
+  const temporary = fs.mkdtempSync(
+    path.join(os.tmpdir(), 'onramp-android-install-test-')
+  );
+  t.after(() => fs.rmSync(temporary, { recursive: true, force: true }));
+  const sdk = path.join(temporary, 'sdk');
+  const javaHome = path.join(temporary, 'jdk');
+  const avdHome = path.join(temporary, 'avd-home');
+  const commandExtension = process.platform === 'win32' ? '.bat' : '';
+  const executableExtension = process.platform === 'win32' ? '.exe' : '';
+  const sdkManager = path.join(
+    sdk,
+    'cmdline-tools',
+    'latest',
+    'bin',
+    'sdkmanager' + commandExtension
+  );
+  const avdManager = path.join(
+    path.dirname(sdkManager),
+    'avdmanager' + commandExtension
+  );
+  const emulator = path.join(
+    sdk,
+    'emulator',
+    'emulator' + executableExtension
+  );
+  const adb = path.join(
+    sdk,
+    'platform-tools',
+    'adb' + executableExtension
+  );
+  const java = path.join(
+    javaHome,
+    'bin',
+    'java' + executableExtension
+  );
+  const architecture = os.arch() === 'arm64' ? 'arm64-v8a' : 'x86_64';
+  const imagePackage = [
+    'system-images',
+    'android-36',
+    'google_apis',
+    architecture,
+  ].join(';');
+  const imageRelative = imagePackage.replaceAll(';', path.sep) + path.sep;
+  const avdName = 'OnRamp_API_36';
+  let emulatorInstalled = false;
+  let imageInstalled = false;
+  let avdCreated = false;
+  const installs = [];
+  const prompts = [];
+
+  for (const filePath of [sdkManager, avdManager, java]) {
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, '');
+  }
+  fs.mkdirSync(avdHome, { recursive: true });
+
+  const currentPackages = () => new Map([
+    [
+      'emulator',
+      {
+        path: 'emulator',
+        installedVersion: emulatorInstalled ? '37.1.11' : null,
+        availableVersion: '37.1.11',
+      },
+    ],
+    [
+      'platform-tools',
+      {
+        path: 'platform-tools',
+        installedVersion: emulatorInstalled ? '37.0.0' : null,
+        availableVersion: '37.0.0',
+      },
+    ],
+    [
+      imagePackage,
+      {
+        path: imagePackage,
+        installedVersion: imageInstalled ? '10' : null,
+        availableVersion: '10',
+      },
+    ],
+  ]);
+
+  const environment = await prepareAndroidEnvironment({
+    sdk,
+    javaHome,
+    env: {
+      ANDROID_AVD_HOME: avdHome,
+      PATH: '',
+    },
+    captureFn: (command, args, options = {}) => {
+      if (command === sdkManager && args[0] === '--version') {
+        return { status: 0, stdout: '23.0\n', stderr: '' };
+      }
+      if (command === emulator && args[0] === '-version') {
+        return {
+          status: 0,
+          stdout: 'Android emulator version 37.1.11.0\n',
+          stderr: '',
+        };
+      }
+      if (command === emulator && args[0] === '-list-avds') {
+        return {
+          status: 0,
+          stdout: avdCreated ? avdName + '\n' : '',
+          stderr: '',
+        };
+      }
+      if (command === avdManager && args[0] === 'create') {
+        assert.equal(options.input, 'no\n');
+        const avdDirectory = path.join(avdHome, avdName + '.avd');
+        fs.mkdirSync(avdDirectory, { recursive: true });
+        fs.writeFileSync(
+          path.join(avdHome, avdName + '.ini'),
+          'path=' + avdDirectory + '\n'
+        );
+        fs.writeFileSync(
+          path.join(avdDirectory, 'config.ini'),
+          'image.sysdir.1=' + imageRelative + '\n'
+        );
+        avdCreated = true;
+        return { status: 0, stdout: '', stderr: '' };
+      }
+      return { status: 0, stdout: '', stderr: '' };
+    },
+    listPackages: currentPackages,
+    installPackages: (_manager, _sdk, _env, selected) => {
+      installs.push(selected);
+      if (selected.includes('emulator')) {
+        for (const filePath of [emulator, adb]) {
+          fs.mkdirSync(path.dirname(filePath), { recursive: true });
+          fs.writeFileSync(filePath, '');
+        }
+        emulatorInstalled = true;
+      }
+      if (selected.includes(imagePackage)) {
+        fs.mkdirSync(path.join(sdk, imageRelative), { recursive: true });
+        imageInstalled = true;
+      }
+    },
+    promptYesNo: async question => {
+      prompts.push(question);
+      return true;
+    },
+    log: () => {},
+  });
+
+  assert.match(prompts[0], /Android Emulator is not installed.*37\.1\.11/);
+  assert.match(prompts[1], /No usable Android virtual device.*API 36/);
+  assert.deepEqual(installs, [
+    ['emulator', 'platform-tools'],
+    [imagePackage],
+  ]);
+  assert.equal(environment.avd, avdName);
+});

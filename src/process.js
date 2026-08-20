@@ -41,7 +41,8 @@ function capture(command, args, options = {}) {
     env: options.env || process.env,
     shell: false,
     encoding: 'utf8',
-    stdio: ['ignore', 'pipe', 'pipe'],
+    input: options.input,
+    stdio: [options.input === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'],
   });
 
   if (result.error) {

@@ -1,11 +1,294 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const { spawn } = require('child_process');
+const {
+  androidCommandCandidates,
+  androidPackageNeedsUpdate,
+  androidSystemImageDetails,
+  bootstrapAndroidCommandLineTools,
+  compareVersions,
+  findAvdManager,
+  findUsableSdkManager,
+  installAndroidSdkPackages,
+  listAndroidSdkPackages,
+  preferredAndroidSystemImage,
+} = require('./android-sdk');
 const { addNativePlatforms } = require('./native');
 const { startMetro, warmMetroBundle } = require('./metro');
 const { capture, findExecutable, prependPath, run } = require('./process');
+const { promptYesNo } = require('./prompt');
 
-function findAndroidSdk(env) {
+const MIN_CLIPBOARD_EMULATOR_VERSION = [33, 1, 23];
+const EMULATOR_BOOT_TIMEOUT_MS = 180000;
+const EMULATOR_BOOT_POLL_MS = 1000;
+
+function parseEmulatorVersion(output) {
+  const match = `${output}`.match(
+    /Android emulator version\s+(\d+)\.(\d+)\.(\d+)(?:\.(\d+))?/i
+  );
+  return match ? match.slice(1).map(value => Number(value || 0)) : null;
+}
+
+function requireClipboardCapableEmulator(emulator, env, captureFn = capture) {
+  const result = captureFn(emulator, ['-version'], { env });
+  const version = parseEmulatorVersion(`${result.stdout}\n${result.stderr}`);
+  if (!version) {
+    throw new Error('Could not determine the installed Android Emulator version.');
+  }
+
+  if (compareVersions(version, MIN_CLIPBOARD_EMULATOR_VERSION) < 0) {
+    throw new Error(
+      'Android Emulator 33.1.23 or newer is required for reliable host '
+      + `clipboard sharing; found ${version.join('.')}. Run the Android app `
+      + 'with OnRamp and approve the offered Emulator upgrade.'
+    );
+  }
+  return version;
+}
+
+function enableHostClipboardSharing(env, options = {}) {
+  const platform = options.platform || process.platform;
+  const captureFn = options.captureFn || capture;
+  if (platform !== 'darwin') {
+    return false;
+  }
+
+  const defaults = findExecutable('defaults', env) || '/usr/bin/defaults';
+  if (!fs.existsSync(defaults)) {
+    throw new Error('macOS defaults command not found; cannot enable emulator clipboard sharing.');
+  }
+  captureFn(
+    defaults,
+    ['write', 'com.android.Emulator', 'set.clipboardSharing', '-bool', 'true'],
+    { env }
+  );
+  return true;
+}
+
+function parseIni(contents) {
+  const values = new Map();
+  for (const line of `${contents}`.split(/\r?\n/)) {
+    const separator = line.indexOf('=');
+    if (separator <= 0) {
+      continue;
+    }
+    values.set(line.slice(0, separator).trim(), line.slice(separator + 1).trim());
+  }
+  return values;
+}
+
+function androidAvdHome(env) {
+  if (env.ANDROID_AVD_HOME) {
+    return path.resolve(env.ANDROID_AVD_HOME);
+  }
+  if (env.ANDROID_USER_HOME) {
+    return path.join(path.resolve(env.ANDROID_USER_HOME), 'avd');
+  }
+  if (env.ANDROID_SDK_HOME) {
+    return path.join(path.resolve(env.ANDROID_SDK_HOME), '.android', 'avd');
+  }
+  return path.join(os.homedir(), '.android', 'avd');
+}
+
+function androidAvdMetadata(avd, sdk, env) {
+  const avdHome = androidAvdHome(env);
+  const locatorPath = path.join(avdHome, `${avd}.ini`);
+  if (!fs.existsSync(locatorPath)) {
+    return { avd, valid: false };
+  }
+
+  const locator = parseIni(fs.readFileSync(locatorPath, 'utf8'));
+  const configuredPath = locator.get('path');
+  const relativePath = locator.get('path.rel');
+  const directory = configuredPath
+    ? path.resolve(configuredPath)
+    : relativePath
+      ? path.resolve(path.dirname(avdHome), relativePath)
+      : path.join(avdHome, `${avd}.avd`);
+  const configPath = path.join(directory, 'config.ini');
+  if (!fs.existsSync(configPath)) {
+    return { avd, directory, valid: false };
+  }
+
+  const config = parseIni(fs.readFileSync(configPath, 'utf8'));
+  const configuredImage = config.get('image.sysdir.1');
+  if (!configuredImage) {
+    return { avd, directory, valid: false };
+  }
+  const image = path.isAbsolute(configuredImage)
+    ? configuredImage
+    : path.resolve(sdk, configuredImage);
+  const normalizedImage = image.split(path.sep).join('/');
+  const stable = /\/system-images\/android-\d+(?:\.\d+)?(?:-ext\d+)?\//.test(
+    normalizedImage
+  );
+  const imageMatch = normalizedImage.match(
+    /\/system-images\/(android-[^/]+)\/([^/]+)\/([^/]+)\/?$/
+  );
+  return {
+    avd,
+    directory,
+    image,
+    packagePath: imageMatch
+      ? ['system-images', ...imageMatch.slice(1)].join(';')
+      : null,
+    stable,
+    valid: fs.existsSync(image),
+  };
+}
+
+function selectAndroidAvd(avds, sdk, env, metadataFn = androidAvdMetadata) {
+  const metadata = avds.map(avd => metadataFn(avd, sdk, env));
+  const stable = metadata
+    .filter(candidate => candidate.valid && candidate.stable)
+    .sort((left, right) => {
+      const leftDetails = left.packagePath
+        ? androidSystemImageDetails({ path: left.packagePath })
+        : null;
+      const rightDetails = right.packagePath
+        ? androidSystemImageDetails({ path: right.packagePath })
+        : null;
+      return compareVersions(
+        rightDetails ? rightDetails.api : [],
+        leftDetails ? leftDetails.api : []
+      );
+    });
+  if (stable.length > 0) {
+    return stable[0].avd;
+  }
+
+  if (metadata.some(candidate => candidate.valid)) {
+    throw new Error(
+      'No stable Android virtual device is installed. OnRamp found only '
+      + 'preview or codename system images, which do not provide reliable host '
+      + 'clipboard behavior. Run the Android app with OnRamp and approve the '
+      + 'offered stable system image and AVD installation.'
+    );
+  }
+  throw new Error(
+    'No usable Android virtual device is installed. Remove broken AVD entries '
+    + 'or run the Android app with OnRamp and approve the offered AVD '
+    + 'installation.'
+  );
+}
+
+function connectedAndroidEmulators(adb, env, captureFn = capture) {
+  const result = captureFn(adb, ['devices'], { env });
+  return result.stdout
+    .split(/\r?\n/)
+    .map(line => line.trim().split(/\s+/))
+    .filter(fields => (
+      fields.length >= 2
+      && fields[0].startsWith('emulator-')
+      && fields[1] === 'device'
+    ))
+    .map(fields => fields[0]);
+}
+
+function androidEmulatorAvdName(adb, serial, env, captureFn = capture) {
+  const result = captureFn(
+    adb,
+    ['-s', serial, 'emu', 'avd', 'name'],
+    { env, check: false }
+  );
+  if (result.status !== 0) {
+    return null;
+  }
+  return result.stdout
+    .split(/\r?\n/)
+    .map(line => line.trim())
+    .find(line => line && line !== 'OK') || null;
+}
+
+function runningAndroidAvdSerial(environment, captureFn = capture) {
+  for (const serial of connectedAndroidEmulators(
+    environment.adb,
+    environment.env,
+    captureFn
+  )) {
+    if (
+      androidEmulatorAvdName(
+        environment.adb,
+        serial,
+        environment.env,
+        captureFn
+      ) === environment.avd
+    ) {
+      return serial;
+    }
+  }
+  return null;
+}
+
+function androidEmulatorLaunchArgs(avd) {
+  return [`@${avd}`, '-no-snapshot-load'];
+}
+
+function wait(milliseconds) {
+  return new Promise(resolve => setTimeout(resolve, milliseconds));
+}
+
+async function waitForAndroidEmulator(environment, options = {}) {
+  const captureFn = options.captureFn || capture;
+  const delay = options.delay || wait;
+  const now = options.now || Date.now;
+  const timeoutMs = options.timeoutMs || EMULATOR_BOOT_TIMEOUT_MS;
+  const pollMs = options.pollMs || EMULATOR_BOOT_POLL_MS;
+  const startedAt = now();
+
+  while (now() - startedAt < timeoutMs) {
+    const serial = runningAndroidAvdSerial(environment, captureFn);
+    if (serial) {
+      const boot = captureFn(
+        environment.adb,
+        ['-s', serial, 'shell', 'getprop', 'sys.boot_completed'],
+        { env: environment.env, check: false }
+      );
+      if (boot.status === 0 && boot.stdout.trim() === '1') {
+        return serial;
+      }
+    }
+    await delay(pollMs);
+  }
+
+  throw new Error(
+    `Android virtual device ${environment.avd} did not finish booting `
+    + `within ${Math.round(timeoutMs / 1000)} seconds.`
+  );
+}
+
+async function ensureAndroidEmulator(environment, options = {}) {
+  const captureFn = options.captureFn || capture;
+  const spawnFn = options.spawnFn || spawn;
+  const log = options.log || console.log;
+  const running = runningAndroidAvdSerial(environment, captureFn);
+  if (running) {
+    log(`Using running Android emulator ${running}`);
+    return running;
+  }
+
+  const args = androidEmulatorLaunchArgs(environment.avd);
+  const child = spawnFn(environment.emulator, args, {
+    detached: true,
+    env: environment.env,
+    stdio: 'ignore',
+  });
+  if (typeof child.unref === 'function') {
+    child.unref();
+  }
+  log(`Cold-starting Android virtual device ${environment.avd}`);
+
+  return waitForAndroidEmulator(environment, {
+    captureFn,
+    delay: options.delay,
+    now: options.now,
+    pollMs: options.pollMs,
+    timeoutMs: options.timeoutMs,
+  });
+}
+
+function androidSdkCandidates(env) {
   const candidates = [env.ANDROID_HOME, env.ANDROID_SDK_ROOT];
   const home = os.homedir();
 
@@ -20,17 +303,27 @@ function findAndroidSdk(env) {
       '/usr/local/android-sdk'
     );
   }
+  return [...new Set(candidates.filter(Boolean).map(candidate => (
+    path.resolve(candidate)
+  )))];
+}
 
-  for (const candidate of candidates) {
-    if (!candidate) {
-      continue;
-    }
-    const sdk = path.resolve(candidate);
-    if (fs.existsSync(path.join(sdk, 'platform-tools'))) {
+function findAndroidSdk(env) {
+  for (const sdk of androidSdkCandidates(env)) {
+    if (
+      fs.existsSync(path.join(sdk, 'platform-tools'))
+      || fs.existsSync(path.join(sdk, 'emulator'))
+      || fs.existsSync(path.join(sdk, 'cmdline-tools'))
+      || fs.existsSync(path.join(sdk, 'tools'))
+    ) {
       return sdk;
     }
   }
   return null;
+}
+
+function defaultAndroidSdk(env) {
+  return androidSdkCandidates(env)[0] || null;
 }
 
 function javaMajor(javaHome) {
@@ -90,49 +383,451 @@ function findJdk17(env) {
   return null;
 }
 
-function resolveAndroidEnvironment() {
-  const env = { ...process.env };
-  const sdk = findAndroidSdk(env);
+function baseAndroidEnvironment(options = {}) {
+  const env = { ...(options.env || process.env) };
+  const sdk = options.sdk || findAndroidSdk(env) || defaultAndroidSdk(env);
   if (!sdk) {
-    throw new Error('Android SDK not found. Install it once with Android Studio, then try again.');
+    throw new Error(
+      'Could not determine where to install or find the Android SDK.'
+    );
   }
 
   env.ANDROID_HOME = sdk;
   env.ANDROID_SDK_ROOT = sdk;
+  const javaHome = options.javaHome || findJdk17(env);
+  if (!javaHome) {
+    throw new Error(
+      'JDK 17 was not found. Install Android Studio or JDK 17, then try again.'
+    );
+  }
+  env.JAVA_HOME = javaHome;
   prependPath(
     env,
     path.join(sdk, 'platform-tools'),
     path.join(sdk, 'emulator'),
-    path.join(sdk, 'cmdline-tools', 'latest', 'bin'),
-    path.join(sdk, 'tools', 'bin')
+    ...androidCommandCandidates(sdk, 'sdkmanager').map(candidate => (
+      path.dirname(candidate)
+    )),
+    path.join(javaHome, 'bin')
   );
+  return { env, javaHome, sdk };
+}
 
+function androidExecutables(environment) {
+  const { env } = environment;
   const adb = findExecutable('adb', env);
   const emulator = findExecutable('emulator', env);
-  if (!adb || !emulator) {
-    throw new Error('The Android SDK is missing its platform-tools or emulator package.');
-  }
+  return { adb, emulator };
+}
 
-  const javaHome = findJdk17(env);
-  if (!javaHome) {
-    throw new Error('JDK 17 was not found. React Native Android builds require JDK 17.');
+function installedAndroidAvds(emulator, env, captureFn = capture) {
+  if (!emulator) {
+    return [];
   }
-  env.JAVA_HOME = javaHome;
-  prependPath(env, path.join(javaHome, 'bin'));
-
-  const avdResult = capture(emulator, ['-list-avds'], { env });
-  const avds = avdResult.stdout
+  const result = captureFn(emulator, ['-list-avds'], {
+    env,
+    check: false,
+  });
+  if (result.status !== 0) {
+    return [];
+  }
+  return result.stdout
     .split(/\r?\n/)
     .map(line => line.trim())
     .filter(Boolean);
-  if (avds.length === 0) {
-    throw new Error('No Android virtual device is installed. Create one once with Android Studio.');
+}
+
+function stableAndroidAvdMetadata(avds, sdk, env) {
+  return avds
+    .map(avd => androidAvdMetadata(avd, sdk, env))
+    .filter(metadata => metadata.valid && metadata.stable);
+}
+
+function androidAvdApi(metadata) {
+  if (!metadata || !metadata.packagePath) {
+    return [];
+  }
+  const details = androidSystemImageDetails({ path: metadata.packagePath });
+  return details ? details.api : [];
+}
+
+function nextAndroidAvdName(api, avds) {
+  const version = api.join('_') || 'Current';
+  const base = 'OnRamp_API_' + version;
+  if (!avds.includes(base)) {
+    return base;
+  }
+  let suffix = 2;
+  while (avds.includes(base + '_' + suffix)) {
+    suffix += 1;
+  }
+  return base + '_' + suffix;
+}
+
+function createAndroidAvd(
+  avdManager,
+  systemImage,
+  avds,
+  environment,
+  captureFn = capture,
+  log = console.log
+) {
+  if (!avdManager) {
+    throw new Error(
+      'Android avdmanager was not found after installing command-line tools.'
+    );
+  }
+  const name = nextAndroidAvdName(systemImage.api, avds);
+  log('Creating Android virtual device ' + name + '...');
+  captureFn(
+    avdManager,
+    [
+      'create',
+      'avd',
+      '--name',
+      name,
+      '--package',
+      systemImage.packageInfo.path,
+      '--force',
+    ],
+    {
+      env: environment.env,
+      input: 'no\n',
+    }
+  );
+  log('✓ Android virtual device ' + name + ' created');
+  return name;
+}
+
+function existingAndroidEnvironmentOrNull(environment, options = {}) {
+  try {
+    return resolveAndroidEnvironment({
+      ...environment,
+      captureFn: options.captureFn,
+      log: options.log,
+    });
+  } catch (_error) {
+    return null;
+  }
+}
+
+async function prepareAndroidEnvironment(options = {}) {
+  const ask = options.promptYesNo || promptYesNo;
+  const captureFn = options.captureFn || capture;
+  const runFn = options.runFn || run;
+  const log = options.log || console.log;
+  const environment = baseAndroidEnvironment(options);
+  let sdkManager = findUsableSdkManager(
+    environment.sdk,
+    environment.env,
+    captureFn
+  );
+
+  if (!sdkManager) {
+    try {
+      sdkManager = await (options.bootstrapCommandLineTools
+        || bootstrapAndroidCommandLineTools)({
+        sdk: environment.sdk,
+        env: environment.env,
+        promptYesNo: ask,
+        fetchFn: options.fetchFn,
+        captureFn,
+        downloadFn: options.downloadFn,
+        extractFn: options.extractFn,
+        log,
+      });
+    } catch (error) {
+      const existing = existingAndroidEnvironmentOrNull(environment, {
+        captureFn,
+        log,
+      });
+      if (existing) {
+        log(
+          'Warning: OnRamp could not check Android package updates: '
+          + error.message
+        );
+        return existing;
+      }
+      throw error;
+    }
+    if (!sdkManager) {
+      const existing = existingAndroidEnvironmentOrNull(environment, {
+        captureFn,
+        log,
+      });
+      if (existing) {
+        log('Skipping the Android package update check.');
+        return existing;
+      }
+      throw new Error(
+        'Android launch cancelled; command-line tools are required to '
+        + 'install the missing emulator components.'
+      );
+    }
   }
 
-  console.log(`Using Android SDK at ${sdk}`);
-  console.log(`Using JDK 17 at ${javaHome}`);
-  console.log(`Using Android virtual device ${avds[0]}`);
-  return { adb, avd: avds[0], env, javaHome, sdk };
+  prependPath(environment.env, path.dirname(sdkManager));
+  let packages;
+  try {
+    packages = (options.listPackages || listAndroidSdkPackages)(
+      sdkManager,
+      environment.sdk,
+      environment.env,
+      captureFn
+    );
+  } catch (error) {
+    const existing = existingAndroidEnvironmentOrNull(environment, {
+      captureFn,
+      log,
+    });
+    if (existing) {
+      log(
+        'Warning: OnRamp could not check Android package updates: '
+        + error.message
+      );
+      return existing;
+    }
+    throw error;
+  }
+
+  let { adb, emulator } = androidExecutables(environment);
+  const emulatorPackage = packages.get('emulator');
+  const platformToolsPackage = packages.get('platform-tools');
+  const packagesToInstall = new Set();
+  let emulatorInstallApproved = false;
+
+  if (!emulator || !emulatorPackage || !emulatorPackage.installedVersion) {
+    const latest = emulatorPackage
+      && (
+        emulatorPackage.availableVersion
+        || emulatorPackage.installedVersion
+      );
+    emulatorInstallApproved = await ask(
+      'Android Emulator is not installed. Install'
+      + (latest ? ' version ' + latest : ' the latest stable version')
+      + ' in ' + environment.sdk
+      + '? This may download more than 1 GB. (y/N): '
+    );
+    if (!emulatorInstallApproved) {
+      throw new Error(
+        'Android launch cancelled; Android Emulator is not installed.'
+      );
+    }
+    packagesToInstall.add('emulator');
+  } else if (androidPackageNeedsUpdate(emulatorPackage)) {
+    const approved = await ask(
+      'Android Emulator ' + emulatorPackage.availableVersion
+      + ' is available; ' + emulatorPackage.installedVersion
+      + ' is installed. Upgrade now? (y/N): '
+    );
+    if (approved) {
+      packagesToInstall.add('emulator');
+    } else {
+      log(
+        'Continuing with Android Emulator '
+        + emulatorPackage.installedVersion + '.'
+      );
+    }
+  }
+
+  if (!adb || !platformToolsPackage || !platformToolsPackage.installedVersion) {
+    let approved = emulatorInstallApproved;
+    if (!approved) {
+      approved = await ask(
+        'Android SDK Platform-Tools are missing. Install the latest version '
+        + 'now? (y/N): '
+      );
+    }
+    if (!approved) {
+      throw new Error(
+        'Android launch cancelled; SDK Platform-Tools are required.'
+      );
+    }
+    packagesToInstall.add('platform-tools');
+  }
+
+  if (packagesToInstall.size > 0) {
+    log(
+      'Installing Android SDK package'
+      + (packagesToInstall.size === 1 ? '' : 's') + '...'
+    );
+    (options.installPackages || installAndroidSdkPackages)(
+      sdkManager,
+      environment.sdk,
+      environment.env,
+      [...packagesToInstall],
+      runFn
+    );
+    prependPath(
+      environment.env,
+      path.join(environment.sdk, 'platform-tools'),
+      path.join(environment.sdk, 'emulator')
+    );
+    packages = (options.listPackages || listAndroidSdkPackages)(
+      sdkManager,
+      environment.sdk,
+      environment.env,
+      captureFn
+    );
+    ({ adb, emulator } = androidExecutables(environment));
+  }
+
+  if (!adb || !emulator) {
+    throw new Error(
+      'Android package installation completed, but adb or Emulator is '
+      + 'still unavailable.'
+    );
+  }
+
+  const emulatorVersion = requireClipboardCapableEmulator(
+    emulator,
+    environment.env,
+    captureFn
+  );
+  const avds = installedAndroidAvds(
+    emulator,
+    environment.env,
+    captureFn
+  );
+  const stableAvds = stableAndroidAvdMetadata(
+    avds,
+    environment.sdk,
+    environment.env
+  );
+  const preferredImage = preferredAndroidSystemImage(packages);
+
+  if (!preferredImage) {
+    if (stableAvds.length === 0) {
+      throw new Error(
+        'No stable Android system image is available for this computer.'
+      );
+    }
+  } else {
+    const matchingAvd = stableAvds.find(metadata => (
+      metadata.packagePath === preferredImage.packageInfo.path
+    ));
+    const imageNeedsUpdate = androidPackageNeedsUpdate(
+      preferredImage.packageInfo
+    );
+    const imageNeedsInstall = (
+      !preferredImage.packageInfo.installedVersion
+      || imageNeedsUpdate
+    );
+    const avdNeedsCreate = !matchingAvd;
+
+    if (imageNeedsInstall || avdNeedsCreate) {
+      const latestApi = preferredImage.api.join('.');
+      const current = stableAvds
+        .slice()
+        .sort((left, right) => compareVersions(
+          androidAvdApi(right),
+          androidAvdApi(left)
+        ))[0];
+      let question;
+      if (!current) {
+        question = (
+          'No usable Android virtual device is installed. Install the latest '
+          + 'stable Android API ' + latestApi
+          + ' system image and create one now? This can be several GB. (y/N): '
+        );
+      } else if (
+        current.packagePath === preferredImage.packageInfo.path
+        && imageNeedsUpdate
+      ) {
+        question = (
+          'A newer revision of the Android API ' + latestApi
+          + ' system image is available. Upgrade it now? (y/N): '
+        );
+      } else {
+        question = (
+          'Android API ' + latestApi
+          + ' is the newest stable emulator image; the selected device uses '
+          + 'API ' + androidAvdApi(current).join('.')
+          + '. Install the latest image and create a reusable OnRamp device? '
+          + 'This can be several GB. (y/N): '
+        );
+      }
+
+      const approved = await ask(question);
+      if (approved) {
+        if (imageNeedsInstall) {
+          (options.installPackages || installAndroidSdkPackages)(
+            sdkManager,
+            environment.sdk,
+            environment.env,
+            [
+              preferredImage.packageInfo.installPath
+              || preferredImage.packageInfo.path,
+            ],
+            runFn
+          );
+        }
+        if (avdNeedsCreate) {
+          const avdManager = findAvdManager(
+            environment.sdk,
+            sdkManager
+          );
+          createAndroidAvd(
+            avdManager,
+            preferredImage,
+            avds,
+            environment,
+            captureFn,
+            log
+          );
+        }
+      } else if (stableAvds.length > 0) {
+        log(
+          'Continuing with Android API '
+          + androidAvdApi(current).join('.') + '.'
+        );
+      } else {
+        throw new Error(
+          'Android launch cancelled; no usable virtual device is installed.'
+        );
+      }
+    }
+  }
+
+  return resolveAndroidEnvironment({
+    ...environment,
+    captureFn,
+    log,
+    emulatorVersion,
+  });
+}
+
+function resolveAndroidEnvironment(options = {}) {
+  const captureFn = options.captureFn || capture;
+  const log = options.log || console.log;
+  const environment = baseAndroidEnvironment(options);
+  const { env, javaHome, sdk } = environment;
+  if (!findAndroidSdk(env)) {
+    throw new Error(
+      'Android SDK not found. Run an Android app with OnRamp to install '
+      + 'the missing emulator components.'
+    );
+  }
+  const { adb, emulator } = androidExecutables(environment);
+  if (!adb || !emulator) {
+    throw new Error(
+      'The Android SDK is missing its platform-tools or emulator package.'
+    );
+  }
+  const emulatorVersion = options.emulatorVersion
+    || requireClipboardCapableEmulator(emulator, env, captureFn);
+
+  const avds = installedAndroidAvds(emulator, env, captureFn);
+  if (avds.length === 0) {
+    throw new Error('No Android virtual device is installed.');
+  }
+  const avd = selectAndroidAvd(avds, sdk, env);
+
+  log('Using Android SDK at ' + sdk);
+  log('Using Android Emulator ' + emulatorVersion.join('.'));
+  log('Using JDK 17 at ' + javaHome);
+  log('Using Android virtual device ' + avd);
+  return { adb, avd, emulator, emulatorVersion, env, javaHome, sdk };
 }
 
 function wakeAndroidEmulators(adb, env) {
@@ -180,11 +875,15 @@ async function runAndroid({
 }) {
   const outputDir = path.resolve(output || process.cwd());
   console.log('Preparing Android development...');
-  const environment = resolveAndroidEnvironment();
+  const environment = await prepareAndroidEnvironment();
   environment.env.ONRAMP_PLATFORM = 'android';
   if (watchDiagnostics) {
     environment.env.ONRAMP_WATCH_DIAGNOSTICS = '1';
   }
+  if (enableHostClipboardSharing(environment.env)) {
+    console.log('✓ Android emulator host clipboard sharing is enabled');
+  }
+  await ensureAndroidEmulator(environment);
   await addNativePlatforms({ platform: 'android', name, output: outputDir });
   const metro = await startMetro({
     output: outputDir,
@@ -218,8 +917,22 @@ async function runAndroid({
 }
 
 module.exports = {
+  androidAvdApi,
+  androidAvdMetadata,
+  androidEmulatorLaunchArgs,
+  androidEmulatorAvdName,
+  compareVersions,
+  connectedAndroidEmulators,
   doctorAndroid,
+  enableHostClipboardSharing,
+  ensureAndroidEmulator,
+  parseEmulatorVersion,
+  prepareAndroidEnvironment,
+  requireClipboardCapableEmulator,
   resolveAndroidEnvironment,
+  runningAndroidAvdSerial,
   runAndroid,
+  selectAndroidAvd,
+  waitForAndroidEmulator,
   wakeAndroidEmulators,
 };

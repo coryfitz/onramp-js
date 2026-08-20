@@ -1,9 +1,9 @@
 const fs = require('fs');
 const path = require('path');
-const readline = require('readline/promises');
 const { addNativePlatforms } = require('./native');
 const { startMetro, warmMetroBundle } = require('./metro');
 const { capture, findExecutable, run } = require('./process');
+const { promptYesNo } = require('./prompt');
 
 const IOS_DESTINATION_QUERY_ATTEMPTS = 3;
 const IOS_DESTINATION_RETRY_DELAY_MS = 500;
@@ -46,16 +46,39 @@ function doctorIos() {
   return { env, pod, version, xcodebuild, xcrun };
 }
 
-async function promptYesNo(question) {
-  if (!process.stdin.isTTY) {
-    return false;
-  }
-  const prompt = readline.createInterface({ input: process.stdin, output: process.stdout });
+async function prepareIosEnvironment(options = {}) {
   try {
-    const answer = await prompt.question(question);
-    return answer.trim().toLowerCase() === 'y';
-  } finally {
-    prompt.close();
+    return (options.doctor || doctorIos)();
+  } catch (error) {
+    if (!/Xcode command-line tools were not found/.test(error.message)) {
+      throw error;
+    }
+    const ask = options.promptYesNo || promptYesNo;
+    const approved = await ask(
+      'iOS Simulator is not installed because Xcode is missing. Open the '
+      + 'Xcode page in the Mac App Store now? (y/N): '
+    );
+    if (!approved) {
+      throw new Error(
+        'iOS launch cancelled; install Xcode to obtain iOS Simulator.'
+      );
+    }
+    const open = options.captureCommand || capture;
+    const result = open(
+      'open',
+      ['macappstore://itunes.apple.com/app/id497799835'],
+      { env: process.env, check: false }
+    );
+    if (result.status !== 0) {
+      throw new Error(
+        'Could not open the Xcode page in the Mac App Store. Install Xcode '
+        + 'from Apple, then run OnRamp again.'
+      );
+    }
+    throw new Error(
+      'The Xcode page is open. Complete Apple\'s Xcode installation, then '
+      + 'run OnRamp again; OnRamp will install the newest iOS runtime.'
+    );
   }
 }
 
@@ -248,7 +271,7 @@ function queryEligibleIosSimulators(iosDir, nativeName, environment) {
   };
 }
 
-function parseAvailableIosSimulatorRuntimeVersions(output) {
+function parseAvailableIosSimulatorRuntimes(output) {
   const data = JSON.parse(output);
   return (data.runtimes || [])
     .filter(runtime => (
@@ -256,11 +279,20 @@ function parseAvailableIosSimulatorRuntimeVersions(output) {
       && typeof runtime.identifier === 'string'
       && runtime.identifier.includes('.SimRuntime.iOS-')
     ))
-    .map(runtime => runtime.version || runtime.name)
-    .filter(Boolean);
+    .map(runtime => ({
+      build: runtime.buildversion || runtime.buildVersion || null,
+      identifier: runtime.identifier,
+      version: runtime.version || runtime.name || null,
+    }))
+    .filter(runtime => runtime.version);
 }
 
-function availableIosSimulatorRuntimeVersions(environment) {
+function parseAvailableIosSimulatorRuntimeVersions(output) {
+  return parseAvailableIosSimulatorRuntimes(output)
+    .map(runtime => runtime.version);
+}
+
+function availableIosSimulatorRuntimes(environment) {
   const result = capture(
     environment.xcrun,
     ['simctl', 'list', '--json', 'runtimes'],
@@ -270,10 +302,210 @@ function availableIosSimulatorRuntimeVersions(environment) {
     return null;
   }
   try {
-    return parseAvailableIosSimulatorRuntimeVersions(result.stdout);
+    return parseAvailableIosSimulatorRuntimes(result.stdout);
   } catch (_error) {
     return null;
   }
+}
+
+function availableIosSimulatorRuntimeVersions(environment) {
+  const runtimes = availableIosSimulatorRuntimes(environment);
+  return runtimes ? runtimes.map(runtime => runtime.version) : null;
+}
+
+function parsePreferredIosSimulatorRuntime(output) {
+  const data = JSON.parse(output);
+  const candidates = Object.entries(data)
+    .filter(([, value]) => (
+      value
+      && value.platform === 'com.apple.platform.iphoneos'
+      && value.chosenRuntimeBuild
+    ))
+    .map(([key, value]) => {
+      const keyVersion = key.match(/^iphoneos(\d+(?:\.\d+)*)$/i);
+      const directoryVersion = String(value.sdkDirectory || '').match(
+        /iPhoneOS(\d+(?:\.\d+)*)\.sdk/i
+      );
+      return {
+        build: value.chosenRuntimeBuild,
+        version: (
+          (keyVersion && keyVersion[1])
+          || (directoryVersion && directoryVersion[1])
+          || value.sdkVersion
+        ),
+      };
+    })
+    .filter(runtime => runtime.version)
+    .sort((left, right) => compareIosVersions(
+      right.version,
+      left.version
+    ));
+  return candidates[0] || null;
+}
+
+function compareIosVersions(left, right) {
+  const leftParts = String(left || '').match(/\d+/g) || [];
+  const rightParts = String(right || '').match(/\d+/g) || [];
+  const width = Math.max(leftParts.length, rightParts.length);
+  for (let index = 0; index < width; index += 1) {
+    const difference = Number(leftParts[index] || 0)
+      - Number(rightParts[index] || 0);
+    if (difference !== 0) {
+      return Math.sign(difference);
+    }
+  }
+  return 0;
+}
+
+function preferredIosSimulatorRuntime(
+  environment,
+  captureCommand = capture
+) {
+  const match = captureCommand(
+    environment.xcrun,
+    ['simctl', 'runtime', 'match', 'list', '-j'],
+    { env: environment.env, check: false }
+  );
+  if (match.status === 0) {
+    try {
+      const preferred = parsePreferredIosSimulatorRuntime(match.stdout);
+      if (preferred) {
+        return preferred;
+      }
+    } catch (_error) {
+      // Fall through for Xcode versions without runtime matching metadata.
+    }
+  }
+
+  const sdkVersion = captureCommand(
+    environment.xcodebuild,
+    ['-version', '-sdk', 'iphonesimulator', 'ProductVersion'],
+    { env: environment.env, check: false }
+  );
+  if (sdkVersion.status !== 0) {
+    return null;
+  }
+  const version = sdkVersion.stdout.trim().match(/\d+(?:\.\d+)*/);
+  if (!version) {
+    return null;
+  }
+  return {
+    build: null,
+    version: version[0].split('.').slice(0, 2).join('.'),
+  };
+}
+
+function iosRuntimeMatchesPreferred(runtime, preferred) {
+  if (!runtime || !preferred) {
+    return false;
+  }
+  if (preferred.build) {
+    return runtime.build === preferred.build;
+  }
+  return compareIosVersions(runtime.version, preferred.version) === 0;
+}
+
+async function ensurePreferredIosSimulatorRuntime(
+  environment,
+  options = {}
+) {
+  const inspect = options.inspectRuntimes || availableIosSimulatorRuntimes;
+  const findPreferred = (
+    options.preferredRuntime || preferredIosSimulatorRuntime
+  );
+  const ask = options.promptYesNo || promptYesNo;
+  const runCommand = options.runCommand || run;
+  const log = options.log || console.log;
+  const preferred = findPreferred(environment);
+  let installed = inspect(environment);
+  if (!preferred || installed === null) {
+    log(
+      'OnRamp could not determine Apple\'s newest compatible iOS '
+      + 'Simulator runtime; continuing with Xcode\'s installed runtimes.'
+    );
+    return { changed: false, installed, preferred };
+  }
+
+  if (installed.some(runtime => (
+    iosRuntimeMatchesPreferred(runtime, preferred)
+  ))) {
+    log(
+      '✓ Latest compatible iOS Simulator runtime is installed (iOS '
+      + preferred.version
+      + (preferred.build ? ', build ' + preferred.build : '') + ')'
+    );
+    return { changed: false, installed, preferred };
+  }
+
+  const current = installed.slice().sort((left, right) => (
+    compareIosVersions(right.version, left.version)
+  ))[0];
+  let question;
+  if (!current) {
+    question = (
+      'No iOS Simulator runtime is installed. Download and install iOS '
+      + preferred.version + ' now? This can be several GB. (y/N): '
+    );
+  } else if (
+    compareIosVersions(current.version, preferred.version) === 0
+    && preferred.build
+  ) {
+    question = (
+      'A newer iOS ' + preferred.version
+      + ' Simulator runtime build is available ('
+      + preferred.build + '; installed ' + (current.build || 'unknown')
+      + '). Upgrade now? This can be several GB. (y/N): '
+    );
+  } else {
+    question = (
+      'iOS ' + preferred.version
+      + ' is the newest Simulator runtime compatible with this Xcode; iOS '
+      + current.version
+      + ' is installed. Download and install the newer runtime? '
+      + 'This can be several GB. (y/N): '
+    );
+  }
+
+  const approved = await ask(question);
+  if (!approved) {
+    if (!current) {
+      throw new Error(
+        'iOS launch cancelled; no Simulator runtime is installed.'
+      );
+    }
+    log('Continuing with iOS Simulator runtime ' + current.version + '.');
+    return { changed: false, installed, preferred };
+  }
+
+  log(
+    'Downloading iOS ' + preferred.version
+    + ' Simulator runtime through Xcode...'
+  );
+  runCommand(
+    environment.xcodebuild,
+    [
+      '-downloadPlatform',
+      'iOS',
+      '-buildVersion',
+      preferred.version,
+    ],
+    options.cwd,
+    environment.env
+  );
+  installed = inspect(environment);
+  if (
+    installed === null
+    || !installed.some(runtime => (
+      iosRuntimeMatchesPreferred(runtime, preferred)
+    ))
+  ) {
+    throw new Error(
+      'Xcode completed the runtime download, but the preferred iOS '
+      + 'Simulator runtime is still unavailable.'
+    );
+  }
+  log('✓ iOS Simulator runtime ' + preferred.version + ' installed');
+  return { changed: true, installed, preferred };
 }
 
 function warmCoreSimulator(environment) {
@@ -469,11 +701,23 @@ function showIosSimulator(
   console.log(`✓ ${simulator.name} window opened`);
 }
 
-function selectIosSimulator(destinations, environment) {
-  const booted = bootedIosSimulatorIds(environment);
-  return destinations.find(destination => booted.has(destination.id))
-    || destinations.find(destination => destination.name.toLowerCase().startsWith('iphone'))
-    || destinations[0]
+function selectIosSimulator(
+  destinations,
+  environment,
+  booted = bootedIosSimulatorIds(environment)
+) {
+  const newest = destinations
+    .slice()
+    .sort((left, right) => compareIosVersions(right.os, left.os));
+  const newestVersion = newest[0] && newest[0].os;
+  const preferred = newest.filter(destination => (
+    compareIosVersions(destination.os, newestVersion) === 0
+  ));
+  return preferred.find(destination => booted.has(destination.id))
+    || preferred.find(destination => (
+      destination.name.toLowerCase().startsWith('iphone')
+    ))
+    || preferred[0]
     || null;
 }
 
@@ -646,7 +890,7 @@ function launchIosWithMetro(
 async function runIos({ name, output, metroPort, watchDiagnostics = false }) {
   const outputDir = path.resolve(output || process.cwd());
   console.log('Preparing iOS development...');
-  const environment = doctorIos();
+  const environment = await prepareIosEnvironment();
   environment.env.ONRAMP_PLATFORM = 'ios';
   if (watchDiagnostics) {
     environment.env.ONRAMP_WATCH_DIAGNOSTICS = '1';
@@ -663,6 +907,8 @@ async function runIos({ name, output, metroPort, watchDiagnostics = false }) {
   await addNativePlatforms({ platform: 'ios', name, output: outputDir });
   const iosDir = path.join(outputDir, 'ios');
   ensureXcodeComponents(environment, iosDir);
+  console.log('Checking for the latest compatible iOS Simulator runtime...');
+  await ensurePreferredIosSimulatorRuntime(environment, { cwd: iosDir });
   ensureIosPods(iosDir, environment, { outputDir });
   console.log('Checking for an eligible iOS simulator...');
   const nativeName = nativeAppName(outputDir);
@@ -750,19 +996,26 @@ async function repairIos({ name, output, fresh = false }) {
 
 module.exports = {
   activateIosSimulator,
+  availableIosSimulatorRuntimes,
   availableIosSimulatorRuntimeVersions,
   doctorIos,
   ensureEligibleIosSimulator,
   ensureIosSimulatorBooted,
+  ensurePreferredIosSimulatorRuntime,
   iosBundleIdentifier,
   iosJsLocation,
   iosPodsAreCurrent,
   launchIosWithMetro,
   parseAvailableIosSimulatorRuntimeVersions,
+  parseAvailableIosSimulatorRuntimes,
   parseBuildSetting,
   parseIosSimulatorState,
+  parsePreferredIosSimulatorRuntime,
+  preferredIosSimulatorRuntime,
+  prepareIosEnvironment,
   queryEligibleIosSimulatorsWithRetry,
   repairIos,
   runIos,
+  selectIosSimulator,
   showIosSimulator,
 };

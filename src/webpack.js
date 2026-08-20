@@ -1,6 +1,8 @@
 const path = require('path');
 const HtmlWebpackPlugin = require('html-webpack-plugin');
 const { generateRoutesConfig } = require('./routes');
+const { OnRampStaticAssetsPlugin } = require('./static-assets');
+const { createWebBabelOptions } = require('./web-babel');
 
 function createWebpackConfig(projectRoot = process.cwd()) {
   const root = path.resolve(projectRoot);
@@ -36,25 +38,7 @@ function createWebpackConfig(projectRoot = process.cwd()) {
           ),
           use: {
             loader: 'babel-loader',
-            options: {
-              babelrc: false,
-              configFile: false,
-              presets: [
-                ['@babel/preset-env', { targets: 'defaults' }],
-                ['@babel/preset-react', { runtime: 'automatic' }],
-                ['@babel/preset-typescript'],
-                ['react-strict-dom/babel-preset', { platform: 'web' }],
-              ],
-              plugins: [
-                ['@stylexjs/babel-plugin', {
-                  dev: true,
-                  runtimeInjection: false,
-                  genConditionalClasses: true,
-                  treeshakeCompensation: true,
-                  unstable_moduleResolution: { type: 'commonJS', rootDir: root },
-                }],
-              ],
-            },
+            options: createWebBabelOptions(root),
           },
         },
         {
@@ -62,24 +46,7 @@ function createWebpackConfig(projectRoot = process.cwd()) {
           include: /node_modules[\\/]react-strict-dom/,
           use: {
             loader: 'babel-loader',
-            options: {
-              babelrc: false,
-              configFile: false,
-              presets: [
-                ['@babel/preset-env', { targets: 'defaults' }],
-                ['@babel/preset-react', { runtime: 'automatic' }],
-                ['react-strict-dom/babel-preset', { platform: 'web' }],
-              ],
-              plugins: [
-                ['@stylexjs/babel-plugin', {
-                  dev: true,
-                  runtimeInjection: false,
-                  genConditionalClasses: true,
-                  treeshakeCompensation: true,
-                  unstable_moduleResolution: { type: 'commonJS', rootDir: root },
-                }],
-              ],
-            },
+            options: createWebBabelOptions(root, { typescript: false }),
           },
         },
       ],
@@ -94,6 +61,7 @@ function createWebpackConfig(projectRoot = process.cwd()) {
         template: path.join(root, 'index.html'),
         inject: true,
       }),
+      new OnRampStaticAssetsPlugin(root),
     ],
     output: {
       path: path.join(root, 'dist'),
