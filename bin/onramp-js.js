@@ -14,7 +14,7 @@ function printUsage() {
   onramp-js create --name <app-name> --output <directory> [--mobile | --all]
   onramp-js add <ios | android | mobile> [--output <directory>]
   onramp-js doctor [web | ios | android | mobile | all]
-  onramp-js run <web | ios | android | mobile> [--output <directory>] [--metro-port <port>]
+  onramp-js run <web | ios | android | mobile> [--output <directory>] [--metro-port <port>] [--watch-diagnostics]
   onramp-js repair ios [--output <directory>] [--fresh]
   onramp-js upgrade [--output <directory>] [--check]
 
@@ -30,6 +30,7 @@ Options:
   --mobile  Include both iOS and Android projects
   --all     Include every supported platform
   --metro-port  Select a free port to use for the native Metro bundler
+  --watch-diagnostics  Log source paths that can trigger native Fast Refresh
   --fresh   Recreate Podfile.lock during an iOS repair
   --check   Preview the frontend upgrade and report whether it can succeed
   --help    Show this help
@@ -140,6 +141,10 @@ function parseRunArgs(args) {
         options[argument.slice(2)] = value;
       }
       index += 1;
+      continue;
+    }
+    if (argument === '--watch-diagnostics') {
+      options.watchDiagnostics = true;
       continue;
     }
     throw new Error(`Unknown option: ${argument}`);

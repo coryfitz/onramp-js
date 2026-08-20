@@ -171,11 +171,20 @@ function doctorAndroid() {
   return environment;
 }
 
-async function runAndroid({ name, output, metroPort, metroStartingPort }) {
+async function runAndroid({
+  name,
+  output,
+  metroPort,
+  metroStartingPort,
+  watchDiagnostics = false,
+}) {
   const outputDir = path.resolve(output || process.cwd());
   console.log('Preparing Android development...');
   const environment = resolveAndroidEnvironment();
   environment.env.ONRAMP_PLATFORM = 'android';
+  if (watchDiagnostics) {
+    environment.env.ONRAMP_WATCH_DIAGNOSTICS = '1';
+  }
   await addNativePlatforms({ platform: 'android', name, output: outputDir });
   const metro = await startMetro({
     output: outputDir,

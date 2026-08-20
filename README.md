@@ -67,6 +67,15 @@ needed:
 npx onramp-js run ios --metro-port 8082
 ```
 
+If Fast Refresh repeatedly reloads an app, enable source watcher diagnostics:
+
+```sh
+npx onramp-js run ios --watch-diagnostics
+```
+
+Each relevant file event is printed with its exact project-relative path so a
+refresh loop can be traced to an editor, generator, or other process.
+
 `run mobile` launches iOS and Android together. iOS uses the requested port,
 when provided, and Android selects the next available port above it.
 Each native launcher prepares its first complete Metro bundle before opening

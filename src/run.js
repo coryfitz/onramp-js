@@ -3,6 +3,7 @@ const path = require('path');
 const { doctorAndroid, runAndroid } = require('./android');
 const { doctorIos, repairIos, runIos } = require('./ios');
 const { findExecutable, run } = require('./process');
+const { doctorWatchman } = require('./watchman');
 
 function nodeVersionTuple() {
   return process.versions.node
@@ -35,14 +36,17 @@ function doctor(platform = 'all') {
     return;
   }
   if (platform === 'ios') {
+    doctorWatchman();
     doctorIos();
     return;
   }
   if (platform === 'android') {
+    doctorWatchman();
     doctorAndroid();
     return;
   }
   if (platform === 'mobile' || platform === 'all') {
+    doctorWatchman();
     doctorIos();
     doctorAndroid();
     return;
@@ -70,6 +74,7 @@ async function runMobile(options, runners = { runIos, runAndroid }) {
       name: options.name,
       output: options.output,
       metroPort: options.metroPort,
+      watchDiagnostics: options.watchDiagnostics,
     });
     if (!iosMetro || !Number.isInteger(iosMetro.port)) {
       throw new Error('The iOS Metro server did not report its port.');
@@ -81,6 +86,7 @@ async function runMobile(options, runners = { runIos, runAndroid }) {
       name: options.name,
       output: options.output,
       metroStartingPort: iosMetro.port + 1,
+      watchDiagnostics: options.watchDiagnostics,
     });
     return { android: androidMetro, ios: iosMetro };
   } catch (error) {
@@ -91,7 +97,7 @@ async function runMobile(options, runners = { runIos, runAndroid }) {
   }
 }
 
-async function runFrontend({ platform, name, output, metroPort }) {
+async function runFrontend({ platform, name, output, metroPort, watchDiagnostics }) {
   const outputDir = path.resolve(output || process.cwd());
   requireFrontend(outputDir);
   doctorWeb();
@@ -100,19 +106,22 @@ async function runFrontend({ platform, name, output, metroPort }) {
     if (metroPort !== undefined) {
       throw new Error('--metro-port is only valid for iOS, Android, or mobile runs.');
     }
+    if (watchDiagnostics) {
+      throw new Error('--watch-diagnostics is only valid for iOS, Android, or mobile runs.');
+    }
     runWeb(outputDir);
     return;
   }
   if (platform === 'ios') {
-    await runIos({ name, output: outputDir, metroPort });
+    await runIos({ name, output: outputDir, metroPort, watchDiagnostics });
     return;
   }
   if (platform === 'android') {
-    await runAndroid({ name, output: outputDir, metroPort });
+    await runAndroid({ name, output: outputDir, metroPort, watchDiagnostics });
     return;
   }
   if (platform === 'mobile') {
-    await runMobile({ name, output: outputDir, metroPort });
+    await runMobile({ name, output: outputDir, metroPort, watchDiagnostics });
     return;
   }
   throw new Error('Run platform must be web, ios, android, or mobile.');

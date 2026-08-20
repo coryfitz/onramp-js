@@ -1,5 +1,6 @@
 const path = require('path');
 const { generateRoutesConfig, watchRoutesConfig } = require('./routes');
+const { metroWatchmanConfig } = require('./watchman');
 
 function shouldWatchRoutes(argv = process.argv) {
   return argv.includes('start');
@@ -15,8 +16,13 @@ function createMetroConfig(projectRoot = process.cwd()) {
     process.once('exit', () => routeWatcher.close());
   }
 
+  const { useWatchman } = metroWatchmanConfig();
+
   return mergeConfig(getDefaultConfig(root), {
-    resolver: { platforms: ['ios', 'android', 'native'] },
+    resolver: {
+      platforms: ['ios', 'android', 'native'],
+      useWatchman,
+    },
   });
 }
 

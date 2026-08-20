@@ -643,11 +643,14 @@ function launchIosWithMetro(
   );
 }
 
-async function runIos({ name, output, metroPort }) {
+async function runIos({ name, output, metroPort, watchDiagnostics = false }) {
   const outputDir = path.resolve(output || process.cwd());
   console.log('Preparing iOS development...');
   const environment = doctorIos();
   environment.env.ONRAMP_PLATFORM = 'ios';
+  if (watchDiagnostics) {
+    environment.env.ONRAMP_WATCH_DIAGNOSTICS = '1';
+  }
 
   if (environment.version.number > 0 && environment.version.number < 16.1) {
     console.log('Warning: React Native 0.81.x works best with Xcode 16.1 or later.');

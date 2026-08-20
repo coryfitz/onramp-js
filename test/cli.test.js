@@ -38,6 +38,13 @@ test('parses a native Metro port separately from the output directory', () => {
   assert.equal(options.output, '/tmp/example');
 });
 
+test('parses native source watcher diagnostics', () => {
+  const options = parseRunArgs(['ios', '--watch-diagnostics']);
+
+  assert.equal(options.platform, 'ios');
+  assert.equal(options.watchDiagnostics, true);
+});
+
 test('parses mobile as a native run target', () => {
   const options = parseRunArgs(['mobile', '--metro-port', '9090']);
 
@@ -175,9 +182,11 @@ test('mobile runs iOS and Android on distinct Metro ports', async () => {
 
   assert.equal(calls[0][0], 'ios');
   assert.equal(calls[0][1].metroPort, 9090);
+  assert.equal(calls[0][1].watchDiagnostics, undefined);
   assert.equal(calls[1][0], 'android');
   assert.equal(calls[1][1].metroStartingPort, 9091);
   assert.equal(calls[1][1].metroPort, undefined);
+  assert.equal(calls[1][1].watchDiagnostics, undefined);
   assert.deepEqual(result, { android: androidMetro, ios: iosMetro });
 });
 

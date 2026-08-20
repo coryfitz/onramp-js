@@ -2,6 +2,7 @@ const http = require('http');
 const net = require('net');
 const path = require('path');
 const { spawn } = require('child_process');
+const { startWatchDiagnostics } = require('./watch-diagnostics');
 
 const DEFAULT_METRO_PORT = 8081;
 const DEFAULT_BUNDLE_TIMEOUT_MS = 120000;
@@ -191,6 +192,7 @@ async function startMetro({
 }) {
   const outputDir = path.resolve(output || process.cwd());
   const port = await selectMetroPort(requestedPort, startingPort);
+  const diagnosticsWatcher = startWatchDiagnostics(outputDir, env);
   console.log(`Starting project Metro on port ${port}...`);
   const child = spawn(
     'npx',
@@ -204,11 +206,19 @@ async function startMetro({
   );
 
   let stopping = false;
+  let diagnosticsClosed = false;
+  const closeDiagnostics = () => {
+    if (diagnosticsWatcher && !diagnosticsClosed) {
+      diagnosticsClosed = true;
+      diagnosticsWatcher.close();
+    }
+  };
   const stop = signal => {
     if (stopping || child.exitCode !== null) {
       return;
     }
     stopping = true;
+    closeDiagnostics();
     child.kill(signal || 'SIGTERM');
   };
 
@@ -220,6 +230,7 @@ async function startMetro({
   process.once('SIGTERM', handleSignal);
 
   child.once('exit', code => {
+    closeDiagnostics();
     process.removeListener('SIGINT', handleSignal);
     process.removeListener('SIGTERM', handleSignal);
     if (!stopping && code !== 0) {
