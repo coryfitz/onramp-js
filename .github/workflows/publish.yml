@@ -79,16 +79,34 @@ jobs:
 
       - run: npm publish
 
-      - name: Wait for the published version to become available
+  verify:
+    needs: [check_version, publish]
+    if: >-
+      always() &&
+      needs.check_version.result == 'success' &&
+      (needs.publish.result == 'success' || needs.publish.result == 'skipped')
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          registry-url: "https://registry.npmjs.org"
+          package-manager-cache: false
+
+      - name: Wait for the version to become installable
         run: |
           package_name="$(node -p "require('./package.json').name")"
           package_version="$(node -p "require('./package.json').version")"
-          for attempt in $(seq 1 24); do
+          for attempt in $(seq 1 120); do
             if npm view "${package_name}@${package_version}" version --prefer-online >/dev/null 2>&1; then
               echo "${package_name}@${package_version} is available on npm."
               exit 0
             fi
+            echo "Waiting for npm to process ${package_name}@${package_version} (${attempt}/120)..."
             sleep 5
           done
-          echo "${package_name}@${package_version} was accepted but is not yet readable from npm." >&2
+          echo "${package_name}@${package_version} is not installable after 10 minutes." >&2
           exit 1
