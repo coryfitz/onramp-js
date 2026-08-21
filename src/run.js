@@ -85,46 +85,46 @@ async function runMobile(options, runners = {
     throw new Error('Mobile development requires two available Metro ports.');
   }
   console.log(
-    'Checking iOS and Android prerequisites before starting either app...'
+    'Checking Android and iOS prerequisites before starting either app...'
   );
   const preparationOptions = {
     name: options.name,
     output: options.output,
     watchDiagnostics: options.watchDiagnostics,
   };
-  const preparedIos = await runners.prepareIosDevelopment(
+  const preparedAndroid = await runners.prepareAndroidDevelopment(
     preparationOptions
   );
-  const preparedAndroid = await runners.prepareAndroidDevelopment(
+  const preparedIos = await runners.prepareIosDevelopment(
     preparationOptions
   );
   console.log('✓ Mobile prerequisites are ready');
 
-  let iosMetro;
+  let androidMetro;
   try {
-    iosMetro = await runners.launchPreparedIos(preparedIos, {
+    androidMetro = await runners.launchPreparedAndroid(preparedAndroid, {
       metroPort: options.metroPort,
       metroInteractive: false,
-      metroLabel: 'iOS',
+      metroLabel: 'Android',
     });
-    if (!iosMetro || !Number.isInteger(iosMetro.port)) {
-      throw new Error('The iOS Metro server did not report its port.');
+    if (!androidMetro || !Number.isInteger(androidMetro.port)) {
+      throw new Error('The Android Metro server did not report its port.');
     }
-    if (iosMetro.port >= 65535) {
+    if (androidMetro.port >= 65535) {
       throw new Error('Mobile development requires two available Metro ports.');
     }
-    const androidMetro = await runners.launchPreparedAndroid(
-      preparedAndroid,
+    const iosMetro = await runners.launchPreparedIos(
+      preparedIos,
       {
-        metroStartingPort: iosMetro.port + 1,
+        metroStartingPort: androidMetro.port + 1,
         metroInteractive: false,
-        metroLabel: 'Android',
+        metroLabel: 'iOS',
       }
     );
     return { android: androidMetro, ios: iosMetro };
   } catch (error) {
-    if (iosMetro) {
-      iosMetro.stop('SIGTERM');
+    if (androidMetro) {
+      androidMetro.stop('SIGTERM');
     }
     throw error;
   }

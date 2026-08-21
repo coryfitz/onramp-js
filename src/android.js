@@ -516,7 +516,7 @@ function existingAndroidEnvironmentOrNull(environment, options = {}) {
 async function prepareAndroidEnvironment(options = {}) {
   const ask = options.promptYesNo || promptYesNo;
   const captureFn = options.captureFn || capture;
-  const runFn = options.runFn || run;
+  const runFn = options.runFn;
   const log = options.log || console.log;
   const environment = baseAndroidEnvironment(options);
   let sdkManager = findUsableSdkManager(
@@ -653,7 +653,7 @@ async function prepareAndroidEnvironment(options = {}) {
       'Installing Android SDK package'
       + (packagesToInstall.size === 1 ? '' : 's') + '...'
     );
-    (options.installPackages || installAndroidSdkPackages)(
+    await (options.installPackages || installAndroidSdkPackages)(
       sdkManager,
       environment.sdk,
       environment.env,
@@ -753,7 +753,7 @@ async function prepareAndroidEnvironment(options = {}) {
       const approved = await ask(question);
       if (approved) {
         if (imageNeedsInstall) {
-          (options.installPackages || installAndroidSdkPackages)(
+          await (options.installPackages || installAndroidSdkPackages)(
             sdkManager,
             environment.sdk,
             environment.env,

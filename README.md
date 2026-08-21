@@ -99,10 +99,11 @@ npx onramp-js run ios --watch-diagnostics
 Each relevant file event is printed with its exact project-relative path so a
 refresh loop can be traced to an editor, generator, or other process.
 
-`run mobile` checks every interactive iOS and Android prerequisite before it
+`run mobile` checks every interactive Android and iOS prerequisite before it
 starts either app, so installation questions cannot be hidden by Metro output.
-It then launches iOS and Android together. iOS uses the requested port, when
-provided, and Android selects the next available port above it. The two Metro
+It then launches Android before iOS so the faster emulator is available first.
+Android uses the requested port, when provided, and iOS selects the next
+available port above it. The two Metro
 servers cannot consume terminal input, and their concurrent output is prefixed
 with `[iOS]` and `[Android]`. Standalone platform runs retain Metro's keyboard
 controls.
@@ -131,7 +132,10 @@ It offers to install or upgrade the Emulator package and to install the newest
 stable Google APIs system image and create a reusable AVD. If `sdkmanager` is
 missing or too old to run, OnRamp first offers to download verified current
 command-line tools from Google's repository. Every download and global SDK
-change requires confirmation. OnRamp then enables host clipboard sharing on
+change requires confirmation. When Google's installer prints only a download
+URL, OnRamp adds a byte-based progress bar and then reports the extraction
+phase while leaving package verification and installation to the official
+Android CLI. OnRamp then enables host clipboard sharing on
 macOS and cold-starts the selected emulator. The cold start bypasses stale
 Quick Boot state without wiping the virtual device's apps or data. Android
 Emulator 33.1.23 or newer is required for reliable host clipboard transport.

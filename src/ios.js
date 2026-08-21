@@ -1160,7 +1160,12 @@ async function prepareIosDevelopment({
 
 async function launchPreparedIos(
   prepared,
-  { metroPort, metroInteractive = true, metroLabel } = {}
+  {
+    metroPort,
+    metroStartingPort,
+    metroInteractive = true,
+    metroLabel,
+  } = {}
 ) {
   const {
     bundleIdentifier,
@@ -1174,6 +1179,7 @@ async function launchPreparedIos(
   const metro = await startMetro({
     output: outputDir,
     requestedPort: metroPort,
+    startingPort: metroStartingPort,
     env: environment.env,
     interactive: metroInteractive,
     label: metroLabel,

@@ -5,10 +5,12 @@ const path = require('node:path');
 const test = require('node:test');
 
 const {
+  androidDownloadUrls,
   androidPackageNeedsUpdate,
   parseAndroidCommandLineToolsPackage,
   parseAndroidSdkPackages,
   preferredAndroidSystemImage,
+  runAndroidSdkInstall,
 } = require('../src/android-sdk');
 const { prepareAndroidEnvironment } = require('../src/android');
 const { capture } = require('../src/process');
@@ -91,6 +93,71 @@ test('parses current Android CLI package output and canonicalizes images', () =>
       ),
     }
   );
+});
+
+test('extracts Android repository URLs without the CLI activity suffix', () => {
+  assert.deepEqual(
+    androidDownloadUrls(
+      'https://dl.google.com/android/repository/system-image.zip...\n'
+    ),
+    ['https://dl.google.com/android/repository/system-image.zip']
+  );
+});
+
+test('reports download progress and extraction for Android CLI installs', async t => {
+  const temporary = fs.mkdtempSync(
+    path.join(os.tmpdir(), 'onramp-android-progress-test-')
+  );
+  t.after(() => fs.rmSync(temporary, { recursive: true, force: true }));
+  const output = [];
+  const stream = {
+    isTTY: false,
+    write: chunk => {
+      output.push(String(chunk));
+      return true;
+    },
+  };
+  const installer = [
+    "const fs = require('fs');",
+    "const path = require('path');",
+    'const sdk = process.argv[1];',
+    "const archiveRoot = path.join(sdk, '.sdk', 'arch');",
+    "const extractRoot = path.join(sdk, '.sdk', 'unzips', 'image');",
+    'fs.mkdirSync(archiveRoot, { recursive: true });',
+    "console.log('https://dl.google.com/android/repository/image.zip...');",
+    'let size = 0;',
+    'const timer = setInterval(() => {',
+    '  size += 25;',
+    "  fs.writeFileSync(path.join(archiveRoot, 'image'), Buffer.alloc(size));",
+    '  if (size === 100) {',
+    '    clearInterval(timer);',
+    '    setTimeout(() => {',
+    '      fs.mkdirSync(extractRoot, { recursive: true });',
+    "      fs.writeFileSync(path.join(extractRoot, 'system.img'), Buffer.alloc(10));",
+    '      setTimeout(() => process.exit(0), 80);',
+    '    }, 20);',
+    '  }',
+    '}, 20);',
+  ].join('\n');
+
+  await runAndroidSdkInstall(
+    process.execPath,
+    ['-e', installer, temporary],
+    undefined,
+    process.env,
+    {
+      downloadSizeFn: async () => 100,
+      intervalMs: 5,
+      sdk: temporary,
+      stderr: stream,
+      stdout: stream,
+    }
+  );
+
+  const rendered = output.join('');
+  assert.match(rendered, /\[[=-]+\]\s+\d+%/);
+  assert.match(rendered, /100% Downloaded; extracting Android SDK package/);
+  assert.match(rendered, /Android SDK package installation complete/);
 });
 
 test('selects the newest stable Google APIs image for the host architecture', () => {
@@ -399,8 +466,9 @@ test('offers to install a missing Android emulator, image, and AVD', async t => 
       return { status: 0, stdout: '', stderr: '' };
     },
     listPackages: currentPackages,
-    installPackages: (_manager, _sdk, _env, selected) => {
+    installPackages: async (_manager, _sdk, _env, selected) => {
       installs.push(selected);
+      await new Promise(resolve => setImmediate(resolve));
       if (selected.includes('emulator')) {
         for (const filePath of [emulator, adb]) {
           fs.mkdirSync(path.dirname(filePath), { recursive: true });

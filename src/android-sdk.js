@@ -1,10 +1,16 @@
 const crypto = require('crypto');
+const { spawn } = require('child_process');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { Readable } = require('stream');
 const { pipeline } = require('stream/promises');
-const { capture, prependPath, run } = require('./process');
+const {
+  capture,
+  isPythonWrapper,
+  prependPath,
+  run,
+} = require('./process');
 
 const ANDROID_REPOSITORY_URL = (
   'https://dl.google.com/android/repository/repository2-1.xml'
@@ -12,6 +18,8 @@ const ANDROID_REPOSITORY_URL = (
 const ANDROID_ARCHIVE_BASE_URL = (
   'https://dl.google.com/android/repository/'
 );
+const ANDROID_INSTALL_PROGRESS_INTERVAL_MS = 250;
+const ANDROID_INSTALL_PROGRESS_WIDTH = 24;
 
 function parseNumericVersion(value) {
   const match = String(value || '').match(/\d+(?:\.\d+)*/);
@@ -445,14 +453,360 @@ function androidPackageNeedsUpdate(packageInfo) {
   );
 }
 
-function installAndroidSdkPackages(
+function androidDownloadUrls(output) {
+  return [...String(output).matchAll(
+    /https:\/\/dl\.google\.com\/android\/repository\/[^\s]+/g
+  )].map(match => (
+    match[0]
+      .replace(/\.{3}$/, '')
+      .replace(/[),;\]]+$/, '')
+  ));
+}
+
+async function androidDownloadSize(
+  url,
+  fetchFn = globalThis.fetch,
+  signal
+) {
+  if (typeof fetchFn !== 'function') {
+    return null;
+  }
+  try {
+    const response = await fetchFn(url, {
+      method: 'HEAD',
+      redirect: 'follow',
+      signal,
+    });
+    if (!response.ok) {
+      return null;
+    }
+    const size = Number(response.headers.get('content-length'));
+    return Number.isFinite(size) && size > 0 ? size : null;
+  } catch (_error) {
+    return null;
+  }
+}
+
+function androidSdkTransientSnapshot(sdk) {
+  const files = new Map();
+  if (!sdk) {
+    return files;
+  }
+  const roots = [
+    [path.join(sdk, '.sdk', 'arch'), 'download'],
+    [path.join(sdk, '.sdk', 'unzips'), 'extract'],
+  ];
+
+  function visit(directory, stage) {
+    let entries;
+    try {
+      entries = fs.readdirSync(directory, { withFileTypes: true });
+    } catch (_error) {
+      return;
+    }
+    for (const entry of entries) {
+      const candidate = path.join(directory, entry.name);
+      if (entry.isDirectory()) {
+        visit(candidate, stage);
+        continue;
+      }
+      if (!entry.isFile()) {
+        continue;
+      }
+      try {
+        const details = fs.statSync(candidate);
+        files.set(candidate, {
+          modified: details.mtimeMs,
+          size: details.size,
+          stage,
+        });
+      } catch (_error) {
+        // Android may move a transient file while OnRamp is inspecting it.
+      }
+    }
+  }
+
+  for (const [directory, stage] of roots) {
+    visit(directory, stage);
+  }
+  return files;
+}
+
+function androidSdkInstallActivity(sdk, baseline) {
+  const current = androidSdkTransientSnapshot(sdk);
+  let downloadedBytes = 0;
+  let extracting = false;
+  for (const [filePath, details] of current) {
+    const previous = baseline.get(filePath);
+    const changed = (
+      !previous
+      || previous.size !== details.size
+      || previous.modified !== details.modified
+    );
+    if (!changed) {
+      continue;
+    }
+    if (details.stage === 'download') {
+      downloadedBytes += details.size;
+    } else if (details.stage === 'extract') {
+      extracting = true;
+    }
+  }
+  return { downloadedBytes, extracting };
+}
+
+function formatAndroidBytes(bytes) {
+  const value = Number(bytes) || 0;
+  if (value >= 1024 ** 3) {
+    return (value / 1024 ** 3).toFixed(1) + ' GB';
+  }
+  if (value >= 1024 ** 2) {
+    return (value / 1024 ** 2).toFixed(0) + ' MB';
+  }
+  if (value >= 1024) {
+    return (value / 1024).toFixed(0) + ' KB';
+  }
+  return value + ' B';
+}
+
+function formatAndroidDuration(milliseconds) {
+  const seconds = Math.max(0, Math.floor(milliseconds / 1000));
+  const minutes = Math.floor(seconds / 60);
+  const remainder = seconds % 60;
+  return minutes > 0
+    ? minutes + 'm ' + String(remainder).padStart(2, '0') + 's'
+    : seconds + 's';
+}
+
+function determinateAndroidProgressLine(downloadedBytes, totalBytes, elapsed) {
+  const percentage = Math.min(
+    100,
+    Math.max(0, Math.floor(downloadedBytes / totalBytes * 100))
+  );
+  const completed = Math.round(
+    percentage / 100 * ANDROID_INSTALL_PROGRESS_WIDTH
+  );
+  const bar = '='.repeat(completed)
+    + '-'.repeat(ANDROID_INSTALL_PROGRESS_WIDTH - completed);
+  return '[' + bar + '] ' + String(percentage).padStart(3, ' ') + '% '
+    + formatAndroidBytes(downloadedBytes) + ' / '
+    + formatAndroidBytes(totalBytes) + ' ('
+    + formatAndroidDuration(elapsed) + ')';
+}
+
+function indeterminateAndroidProgressLine(tick, elapsed) {
+  const markerWidth = 5;
+  const travel = ANDROID_INSTALL_PROGRESS_WIDTH - markerWidth;
+  const cycle = travel * 2;
+  const position = tick % cycle <= travel
+    ? tick % cycle
+    : cycle - tick % cycle;
+  const bar = '.'.repeat(position)
+    + '='.repeat(markerWidth)
+    + '.'.repeat(ANDROID_INSTALL_PROGRESS_WIDTH - markerWidth - position);
+  return '[' + bar + '] Downloading Android SDK package ('
+    + formatAndroidDuration(elapsed) + ')';
+}
+
+class AndroidSdkInstallProgress {
+  constructor(sdk, options = {}) {
+    this.sdk = sdk;
+    this.output = options.output || process.stdout;
+    this.fetchFn = options.fetchFn || globalThis.fetch;
+    this.downloadSizeFn = options.downloadSizeFn || androidDownloadSize;
+    this.now = options.now || Date.now;
+    this.baseline = androidSdkTransientSnapshot(sdk);
+    this.startedAt = this.now();
+    this.downloadStartedAt = this.startedAt;
+    this.downloadedBytes = 0;
+    this.totalBytes = null;
+    this.tick = 0;
+    this.pendingOutput = '';
+    this.seenUrls = new Set();
+    this.activeUrl = null;
+    this.activeLine = false;
+    this.lastNonTtyKey = null;
+    this.abortController = null;
+  }
+
+  observe(output) {
+    this.pendingOutput = (this.pendingOutput + String(output)).slice(-8192);
+    for (const url of androidDownloadUrls(this.pendingOutput)) {
+      if (this.seenUrls.has(url)) {
+        continue;
+      }
+      this.seenUrls.add(url);
+      this.beginDownload(url);
+    }
+  }
+
+  beginDownload(url) {
+    if (this.abortController) {
+      this.abortController.abort();
+    }
+    this.abortController = new AbortController();
+    this.activeUrl = url;
+    this.baseline = androidSdkTransientSnapshot(this.sdk);
+    this.downloadStartedAt = this.now();
+    this.downloadedBytes = 0;
+    this.totalBytes = null;
+    this.tick = 0;
+    this.lastNonTtyKey = null;
+    Promise.resolve(this.downloadSizeFn(
+      url,
+      this.fetchFn,
+      this.abortController.signal
+    )).then(size => {
+      if (this.activeUrl === url && Number(size) > 0) {
+        this.totalBytes = Number(size);
+        this.sample();
+      }
+    }).catch(() => {
+      // Content length is optional; retain an indeterminate progress bar.
+    });
+  }
+
+  clearLine() {
+    if (this.activeLine && this.output.isTTY) {
+      this.output.write('\r\x1b[2K');
+      this.activeLine = false;
+    }
+  }
+
+  sample() {
+    if (!this.activeUrl) {
+      return;
+    }
+    const activity = androidSdkInstallActivity(this.sdk, this.baseline);
+    this.downloadedBytes = Math.max(
+      this.downloadedBytes,
+      activity.downloadedBytes
+    );
+    const elapsed = this.now() - this.downloadStartedAt;
+    let line;
+    let key;
+    if (activity.extracting) {
+      const bar = '='.repeat(ANDROID_INSTALL_PROGRESS_WIDTH);
+      line = '[' + bar + '] 100% Downloaded; extracting Android SDK package ('
+        + formatAndroidDuration(elapsed) + ')';
+      key = 'extract';
+    } else if (this.totalBytes) {
+      line = determinateAndroidProgressLine(
+        Math.min(this.downloadedBytes, this.totalBytes),
+        this.totalBytes,
+        elapsed
+      );
+      key = 'download-' + Math.floor(
+        Math.min(this.downloadedBytes, this.totalBytes)
+        / this.totalBytes * 10
+      );
+    } else {
+      line = indeterminateAndroidProgressLine(this.tick, elapsed);
+      key = 'download-indeterminate-' + Math.floor(elapsed / 10000);
+    }
+    this.tick += 1;
+
+    if (this.output.isTTY) {
+      this.output.write('\r\x1b[2K' + line);
+      this.activeLine = true;
+      return;
+    }
+    if (key !== this.lastNonTtyKey) {
+      this.output.write(line + '\n');
+      this.lastNonTtyKey = key;
+    }
+  }
+
+  finish(success) {
+    const hadDownload = Boolean(this.activeUrl);
+    this.activeUrl = null;
+    if (this.abortController) {
+      this.abortController.abort();
+    }
+    this.clearLine();
+    if (success && hadDownload) {
+      this.output.write('✓ Android SDK package installation complete\n');
+    }
+  }
+}
+
+function runAndroidSdkInstall(
+  command,
+  args,
+  cwd,
+  env = process.env,
+  options = {}
+) {
+  const spawnFn = options.spawnFn || spawn;
+  const stdout = options.stdout || process.stdout;
+  const stderr = options.stderr || process.stderr;
+  const progress = new AndroidSdkInstallProgress(options.sdk, {
+    downloadSizeFn: options.downloadSizeFn,
+    fetchFn: options.fetchFn,
+    now: options.now,
+    output: stdout,
+  });
+  const child = spawnFn(command, args, {
+    cwd,
+    env,
+    shell: false,
+    stdio: ['inherit', 'pipe', 'pipe'],
+  });
+  const interval = setInterval(
+    () => progress.sample(),
+    options.intervalMs || ANDROID_INSTALL_PROGRESS_INTERVAL_MS
+  );
+
+  function forward(chunk, destination) {
+    progress.observe(chunk);
+    progress.clearLine();
+    destination.write(chunk);
+    progress.sample();
+  }
+
+  if (child.stdout) {
+    child.stdout.on('data', chunk => forward(chunk, stdout));
+  }
+  if (child.stderr) {
+    child.stderr.on('data', chunk => forward(chunk, stderr));
+  }
+
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    function finish(error, status) {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearInterval(interval);
+      progress.finish(!error);
+      if (error) {
+        reject(error);
+      } else {
+        resolve({ status });
+      }
+    }
+
+    child.once('error', error => finish(error));
+    child.once('close', status => {
+      if (status === 0) {
+        finish(null, status);
+        return;
+      }
+      const label = isPythonWrapper(env) ? 'Frontend command' : command;
+      finish(new Error(label + ' exited with status ' + status));
+    });
+  });
+}
+
+async function installAndroidSdkPackages(
   sdkManager,
   sdk,
   env,
   packages,
-  runFn = run
+  runFn = runAndroidSdkInstall
 ) {
-  runFn(
+  return runFn(
     sdkManager,
     [
       '--sdk_root=' + sdk,
@@ -460,7 +814,8 @@ function installAndroidSdkPackages(
       ...packages,
     ],
     undefined,
-    env
+    env,
+    { sdk }
   );
 }
 
@@ -538,6 +893,7 @@ module.exports = {
   androidRepositoryHost,
   androidSystemImageArchitecture,
   androidSystemImageDetails,
+  androidDownloadUrls,
   bootstrapAndroidCommandLineTools,
   compareVersions,
   downloadFile,
@@ -549,4 +905,5 @@ module.exports = {
   parseAndroidSdkPackages,
   parseNumericVersion,
   preferredAndroidSystemImage,
+  runAndroidSdkInstall,
 };
