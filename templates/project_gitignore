@@ -1,0 +1,22 @@
+node_modules/
+dist/
+*.log
+.DS_Store
+
+# Generated platform route registries
+src/generated/routes.android.ts
+src/generated/routes.ios.ts
+src/generated/routes.web.ts
+
+# Native build output
+android/.gradle/
+android/.kotlin/
+android/app/build/
+android/app/.cxx/
+ios/build/
+ios/Pods/
+.bundle/
+
+# OnRamp local state
+.metro-health-check*
+.onramp/backups/

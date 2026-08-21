@@ -13,7 +13,8 @@
     "start": "npm run start:native",
     "web": "npm run start:web",
     "build:routes": "node scripts/build-routes.js",
-    "test": "jest"
+    "typecheck": "tsc --noEmit",
+    "test": "jest --runInBand"
   },
   "dependencies": {
     "@react-navigation/bottom-tabs": "^6.6.1",
@@ -54,7 +55,15 @@
     "react-test-renderer": "19.1.0"
   },
   "jest": {
-    "preset": "react-native"
+    "preset": "react-native",
+    "modulePathIgnorePatterns": [
+      "/.onramp/backups/"
+    ],
+    "testPathIgnorePatterns": [
+      "/node_modules/",
+      "/ios/"
+    ],
+    "watchman": false
   },
   "engines": {
     "node": ">=20.19.4 <21"

@@ -14,6 +14,7 @@ const {
   applyFrontendUpgrade,
   planFrontendUpgrade,
   printFrontendCheckResult,
+  updatedFrontendGitignore,
 } = require('../src/upgrade');
 
 const LEGACY_BABEL_CONFIG = `module.exports = {
@@ -40,8 +41,8 @@ test('plans a legacy frontend migration without overwriting known files', t => {
   const plan = planFrontendUpgrade(outputDir);
 
   assert.equal(plan.fromSchema, 0);
-  assert.equal(plan.toSchema, 1);
-  assert.equal(plan.migrations.length, 1);
+  assert.equal(plan.toSchema, 2);
+  assert.equal(plan.migrations.length, 2);
   assert.deepEqual(plan.conflicts, []);
   assert.ok(plan.changes.some(change => change.relativePath === 'babel.config.js'));
   assert.ok(plan.changes.some(change => change.relativePath === 'package.json'));
@@ -65,6 +66,20 @@ test('preserves a managed frontend customization when its base is unchanged', t 
     plan.changes.some(change => change.relativePath === 'webpack.config.js'),
     false
   );
+});
+
+test('merges generated output ignores without replacing project rules', t => {
+  const outputDir = createProject(t);
+  fs.writeFileSync(path.join(outputDir, '.gitignore'), 'custom-cache/\n');
+
+  const plan = planFrontendUpgrade(outputDir);
+  const change = plan.changes.find(item => item.relativePath === '.gitignore');
+
+  assert.match(change.content, /^custom-cache\//);
+  assert.match(change.content, /routes\.android\.ts/);
+  assert.match(change.content, /android\/app\/\.cxx\//);
+  assert.equal(updatedFrontendGitignore(change.content), change.content);
+  assert.deepEqual(plan.conflicts, []);
 });
 
 test('reports a conflict when both framework and project changed a managed file', t => {

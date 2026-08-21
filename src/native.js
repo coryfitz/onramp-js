@@ -1,6 +1,11 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const {
+  nativeProjectName,
+  prepareNativeConfig,
+  syncNativeProjects,
+} = require('./native-config');
 const { run } = require('./process');
 
 const REACT_NATIVE_VERSION = '0.81.1';
@@ -13,21 +18,6 @@ const CLI_DEPENDENCIES = {
 
 function writeJson(filePath, value) {
   fs.writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
-}
-
-function nativeProjectName(value) {
-  const parts = String(value || '').match(/[A-Za-z0-9]+/g) || [];
-  let name = parts
-    .map(part => `${part.charAt(0).toUpperCase()}${part.slice(1).toLowerCase()}`)
-    .join('');
-
-  if (!name) {
-    name = 'App';
-  }
-  if (!/^[A-Za-z]/.test(name)) {
-    name = `App${name}`;
-  }
-  return name;
 }
 
 function platformDirectories(platform) {
@@ -63,24 +53,6 @@ function ensureNativeCliDependencies(outputDir) {
   }
 }
 
-function syncNativeMetadata(outputDir, requestedName) {
-  const appJsonPath = path.join(outputDir, 'app.json');
-  const packagePath = path.join(outputDir, 'package.json');
-  const appJson = JSON.parse(fs.readFileSync(appJsonPath, 'utf8'));
-  const packageJson = JSON.parse(fs.readFileSync(packagePath, 'utf8'));
-  const sourceName = requestedName
-    || appJson.displayName
-    || appJson.name
-    || packageJson.name;
-  const name = nativeProjectName(sourceName);
-
-  appJson.name = name;
-  appJson.displayName = appJson.displayName || sourceName || name;
-  writeJson(appJsonPath, appJson);
-  fs.writeFileSync(path.join(outputDir, '.nvmrc'), '20\n', 'utf8');
-  return name;
-}
-
 async function addNativePlatforms({ platform, name, output }) {
   const outputDir = path.resolve(output || process.cwd());
   const packagePath = path.join(outputDir, 'package.json');
@@ -92,13 +64,18 @@ async function addNativePlatforms({ platform, name, output }) {
 
   const directories = platformDirectories(platform);
   ensureNativeCliDependencies(outputDir);
-  const nativeName = syncNativeMetadata(outputDir, name);
+  const nativeConfig = prepareNativeConfig(outputDir, name);
+  const nativeName = nativeConfig.name;
   const missing = directories.filter(
     directory => !fs.existsSync(path.join(outputDir, directory))
   );
 
   if (missing.length === 0) {
     console.log(`${directories.join(' and ')} already prepared.`);
+    const synchronized = syncNativeProjects(outputDir, nativeConfig, directories);
+    for (const directory of synchronized) {
+      console.log(`✓ ${directory} identity and launcher assets synchronized`);
+    }
     return { nativeName, added: [] };
   }
 
@@ -106,19 +83,29 @@ async function addNativePlatforms({ platform, name, output }) {
   const temporaryProject = path.join(temporaryRoot, 'project');
 
   try {
+    const packageName = directories.length === 1 && directories[0] === 'ios'
+      ? nativeConfig.ios.bundleIdentifier
+      : nativeConfig.android.package || nativeConfig.ios.bundleIdentifier;
+    const initArguments = [
+      '--yes',
+      `@react-native-community/cli@${REACT_NATIVE_CLI_VERSION}`,
+      'init',
+      nativeName,
+      '--version',
+      REACT_NATIVE_VERSION,
+      '--directory',
+      temporaryProject,
+      '--skip-install',
+      '--skip-git-init',
+      '--title',
+      nativeConfig.displayName,
+    ];
+    if (packageName) {
+      initArguments.push('--package-name', packageName);
+    }
     run(
       'npx',
-      [
-        '--yes',
-        `@react-native-community/cli@${REACT_NATIVE_CLI_VERSION}`,
-        'init',
-        nativeName,
-        '--version',
-        REACT_NATIVE_VERSION,
-        '--directory',
-        temporaryProject,
-        '--skip-install',
-      ],
+      initArguments,
       outputDir
     );
 
@@ -132,6 +119,11 @@ async function addNativePlatforms({ platform, name, output }) {
     }
   } finally {
     fs.rmSync(temporaryRoot, { recursive: true, force: true });
+  }
+
+  const synchronized = syncNativeProjects(outputDir, nativeConfig, directories);
+  for (const directory of synchronized) {
+    console.log(`✓ ${directory} identity and launcher assets synchronized`);
   }
 
   return { nativeName, added: missing };

@@ -1,11 +1,11 @@
 const path = require('path');
-const HtmlWebpackPlugin = require('html-webpack-plugin');
 const { generateRoutesConfig } = require('./routes');
 const { OnRampStaticAssetsPlugin } = require('./static-assets');
-const { createWebBabelOptions } = require('./web-babel');
+const { createWebBabelOptions, resolveFromProject } = require('./web-babel');
 
 function createWebpackConfig(projectRoot = process.cwd()) {
   const root = path.resolve(projectRoot);
+  const HtmlWebpackPlugin = require(resolveFromProject('html-webpack-plugin', root));
   process.env.ONRAMP_PLATFORM = 'web';
 
   const generateRoutes = () => generateRoutesConfig(root);
@@ -54,6 +54,7 @@ function createWebpackConfig(projectRoot = process.cwd()) {
     resolve: {
       extensions: ['.web.js', '.web.jsx', '.web.ts', '.web.tsx', '.js', '.jsx', '.ts', '.tsx'],
       alias: { 'react-native$': 'react-strict-dom' },
+      modules: [path.join(root, 'node_modules'), 'node_modules'],
     },
     plugins: [
       new OnRampRoutesPlugin(),

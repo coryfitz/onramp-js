@@ -150,9 +150,16 @@ function isDynamicRoute(routePath) {
   return routePath.split('/').some(seg => seg.startsWith(':'));
 }
 
-// Build the import specifier relative to src/generated/routes.ts
+function routesFileName(platform) {
+  if (platform === 'web') return 'routes.web.ts';
+  if (platform === 'ios') return 'routes.ios.ts';
+  if (platform === 'android') return 'routes.android.ts';
+  return 'routes.ts';
+}
+
+// Build the import specifier relative to a file under src/generated/.
 function buildImportPath(projectRoot, chosenRelFromApp) {
-  // routes.ts is at "<root>/src/generated/routes.ts"
+  // Generated route modules all live at "<root>/src/generated/".
   // our files are at "<root>/app/<...>"
   // so relative path should be "../../app/<...>" (posix-style for consistency)
   const from = path.join(projectRoot, 'src', 'generated', 'routes.ts');
@@ -166,7 +173,6 @@ function buildImportPath(projectRoot, chosenRelFromApp) {
 function generateRoutesConfig(projectRoot = process.cwd()) {
   const appDir = path.join(projectRoot, 'app');
   const outDir = path.join(projectRoot, 'src', 'generated');
-  const outFile = path.join(outDir, 'routes.ts');
 
   if (!fs.existsSync(appDir)) {
     console.error(`No "app" directory found at ${appDir}`);
@@ -175,6 +181,8 @@ function generateRoutesConfig(projectRoot = process.cwd()) {
   if (!fs.existsSync(outDir)) fs.mkdirSync(outDir, { recursive: true });
 
   const platform = getPlatform();
+  const outputName = routesFileName(platform);
+  const outFile = path.join(outDir, outputName);
   const byStem = scanApp(appDir);
 
   const routes = [];
@@ -248,7 +256,7 @@ function generateRoutesConfig(projectRoot = process.cwd()) {
   }
 
   fs.writeFileSync(outFile, file, 'utf8');
-  console.log(`Generated routes configuration at src/generated/routes.ts`);
+  console.log(`Generated routes configuration at src/generated/${outputName}`);
   console.log(`Found ${routes.length} routes`);
   return true;
 }
@@ -281,4 +289,4 @@ function watchRoutesConfig(projectRoot = process.cwd()) {
   return watcher;
 }
 
-module.exports = { generateRoutesConfig, watchRoutesConfig };
+module.exports = { generateRoutesConfig, routesFileName, watchRoutesConfig };

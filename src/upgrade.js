@@ -13,6 +13,17 @@ const {
 } = require('./project');
 const { isPythonWrapper, run } = require('./process');
 
+const FRONTEND_GITIGNORE_ENTRIES = [
+  'src/generated/routes.android.ts',
+  'src/generated/routes.ios.ts',
+  'src/generated/routes.web.ts',
+  'android/.kotlin/',
+  'android/app/.cxx/',
+  '.bundle/',
+  '.metro-health-check*',
+  '.onramp/backups/',
+];
+
 const LEGACY_MANAGED_HASHES = {
   'babel.config.js': [
     '44d42353b1c8986f910673427f2cabf3e85d7bee374deaf3e3855f47a2c784c9',
@@ -33,6 +44,13 @@ const LEGACY_MANAGED_HASHES = {
   'src/navigation/NavigationProvider.tsx': [
     'b2b15a122634eafd00ef0892b4d629b72d94e9d135478d3714e2d1f3717ed233',
   ],
+  'src/navigation/RouteRegistry.tsx': [
+    'cd47104819f460467921ee6a2bc59dff3727b9223a36169499affc734226b897',
+  ],
+  'tsconfig.json': [
+    'ed4f7b9cefd9a46c0be9e0a9b80aae60f84eabbf248af016cfc229a8e2041ee1',
+    '14d4d3ab6d7b5dbebe1f4d2db7732b6beda5391ef84fe0e41d29feb44942d286',
+  ],
   'webpack.config.js': [
     '155bca7673ad0b4d02a92c948d99ed5bb82a634ed6d1a3d4007a0e52d948ed62',
     '9aa02f5f6458efeddc7a198ef910e41f54ce74e8d1d7e325c11b168a418ae411',
@@ -41,6 +59,7 @@ const LEGACY_MANAGED_HASHES = {
 
 const FRONTEND_MIGRATIONS = new Map([
   [0, 'adopt package-owned tooling and versioned frontend metadata'],
+  [1, 'isolate generated route modules by platform'],
 ]);
 
 function frontendMigrationSteps(fromSchema, toSchema) {
@@ -57,6 +76,15 @@ function frontendMigrationSteps(fromSchema, toSchema) {
 
 function desiredPackageSpec() {
   return process.env.ONRAMP_JS_PACKAGE_SPEC || packageJson.version;
+}
+
+function updatedFrontendGitignore(content) {
+  const existing = new Set(content.split(/\r?\n/).map(line => line.trim()));
+  const missing = FRONTEND_GITIGNORE_ENTRIES.filter(entry => !existing.has(entry));
+  if (!missing.length) return content;
+  let updated = content;
+  if (updated && !updated.endsWith('\n')) updated += '\n';
+  return `${updated}\n# OnRamp generated and recoverable output\n${missing.join('\n')}\n`;
 }
 
 function planFrontendUpgrade(outputDir) {
@@ -97,9 +125,9 @@ function planFrontendUpgrade(outputDir) {
       // The framework base is unchanged, so preserve any project customization.
       continue;
     }
-    const isUnmodified = legacy
-      ? (LEGACY_MANAGED_HASHES[relativePath] || []).includes(currentHash)
-      : expectedHash === currentHash;
+    const isUnmodified = expectedHash
+      ? expectedHash === currentHash
+      : (LEGACY_MANAGED_HASHES[relativePath] || []).includes(currentHash);
 
     if (isUnmodified) {
       changes.push({ relativePath, content: targetContent, reason: 'update managed file' });
@@ -110,8 +138,39 @@ function planFrontendUpgrade(outputDir) {
     }
   }
 
+  const gitignorePath = path.join(root, '.gitignore');
+  const currentGitignore = fs.existsSync(gitignorePath)
+    ? fs.readFileSync(gitignorePath, 'utf8')
+    : '';
+  const targetGitignore = updatedFrontendGitignore(currentGitignore);
+  if (targetGitignore !== currentGitignore) {
+    changes.push({
+      relativePath: '.gitignore',
+      content: targetGitignore,
+      reason: 'ignore generated native and route output',
+    });
+  }
+
   const currentPackage = JSON.parse(fs.readFileSync(packagePath, 'utf8'));
   const targetPackage = JSON.parse(JSON.stringify(currentPackage));
+  targetPackage.scripts = targetPackage.scripts || {};
+  if (!targetPackage.scripts.typecheck) {
+    targetPackage.scripts.typecheck = 'tsc --noEmit';
+  }
+  if (targetPackage.scripts.test === 'jest') {
+    targetPackage.scripts.test = 'jest --runInBand';
+  }
+  targetPackage.jest = targetPackage.jest || {};
+  targetPackage.jest.preset = targetPackage.jest.preset || 'react-native';
+  targetPackage.jest.modulePathIgnorePatterns = (
+    targetPackage.jest.modulePathIgnorePatterns || ['/.onramp/backups/']
+  );
+  targetPackage.jest.testPathIgnorePatterns = (
+    targetPackage.jest.testPathIgnorePatterns || ['/node_modules/', '/ios/']
+  );
+  if (targetPackage.jest.watchman === undefined) {
+    targetPackage.jest.watchman = false;
+  }
   targetPackage.devDependencies = targetPackage.devDependencies || {};
   targetPackage.devDependencies['onramp-js'] = desiredPackageSpec();
   const targetPackageContent = `${JSON.stringify(targetPackage, null, 2)}\n`;
@@ -293,5 +352,6 @@ module.exports = {
   planFrontendUpgrade,
   printFrontendCheckResult,
   printFrontendPlan,
+  updatedFrontendGitignore,
   upgradeFrontend,
 };

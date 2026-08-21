@@ -8,7 +8,9 @@ const componentCache = new Map<string, ComponentType<any>>();
 
 // Route registry class
 class RouteRegistry {
-  private routes = new Map(routes.map(route => [route.path, route]));
+  private routes = new Map<string, (typeof routes)[number]>(
+    routes.map(route => [route.path, route]),
+  );
   
   // Get route configuration by path
   getRoute(path: string) {

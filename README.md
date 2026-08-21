@@ -39,6 +39,29 @@ npx onramp-js add mobile
 The `add` command is safe to run again; platform directories that already
 exist are left in place.
 
+## Native identity and launcher assets
+
+`app.json` is the declarative source for native identity. On every native add
+or run, OnRamp synchronizes the display name, Android application ID and
+version, iOS bundle ID and version, and launcher icon without regenerating the
+native projects:
+
+```json
+{
+  "name": "MyApp",
+  "displayName": "My App",
+  "version": "1.0.0",
+  "icon": "./assets/logo.png",
+  "android": { "package": "com.example.myapp", "versionCode": 1 },
+  "ios": { "bundleIdentifier": "com.example.myapp", "buildNumber": "1" }
+}
+```
+
+The icon must be a square 1024×1024 PNG inside the frontend project. Change
+the example reverse-domain identifiers to identifiers controlled by the app
+owner before distribution. Native-safe `name` and human-facing `displayName`
+remain separate, so names such as `MyApp` display as “My App”.
+
 ## Check and run platforms
 
 `doctor` checks the required development tools without changing the app:
@@ -135,8 +158,11 @@ Modified managed files are reported as conflicts and are never overwritten.
 The generated `app/` directory contains file-based routes. Route generation,
 the navigation provider, Metro defaults, Babel defaults, and Webpack defaults
 live in `onramp-js`; the generated configuration files are thin project-local
-entry points. Metro and Webpack regenerate `src/generated/routes.ts` when
-route files are added or removed;
+entry points. The deterministic fallback is `src/generated/routes.ts`; Metro
+and Webpack regenerate ignored `routes.ios.ts`, `routes.android.ts`, and
+`routes.web.ts` siblings when route files are added or removed. Separate files
+prevent concurrent `run mobile` processes from overwriting each other's route
+registry;
 `npm run build:routes` remains available for deterministic checks.
 
 The generated root uses `SafeAreaProvider` and `SafeAreaView` so its first iOS
@@ -145,6 +171,21 @@ screen respects device insets by default.
 On web, React Strict DOM `css.create` rules are injected into the page by the
 StyleX transform. Files placed in `assets/` are served by the development
 server and copied to the root of `dist/` by production builds.
+
+## Optional device-only secure storage
+
+Install the native adapter only in apps that store credentials or other
+secrets:
+
+```sh
+npm install --legacy-peer-deps react-native-keychain@^10.0.0
+```
+
+Then import `setSecureValue`, `getSecureValue`, `removeSecureValue`, or their
+JSON counterparts from `onramp-js/secure-storage`. The adapter uses
+`WHEN_UNLOCKED_THIS_DEVICE_ONLY` on iOS without enabling iCloud synchronization
+and requires Android Keystore-backed `SECURE_SOFTWARE` storage. It intentionally
+rejects web use rather than silently placing secrets in browser storage.
 
 ## OnRamp Python integration
 

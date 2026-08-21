@@ -5,7 +5,7 @@ const path = require('path');
 const packageJson = require('../package.json');
 const templatePackageJson = require('../templates/package.json');
 
-const FRONTEND_SCHEMA_VERSION = 1;
+const FRONTEND_SCHEMA_VERSION = 2;
 const FRONTEND_MANIFEST = path.join('.onramp', 'project.json');
 const MANAGED_FILES = [
   'babel.config.js',
@@ -13,6 +13,8 @@ const MANAGED_FILES = [
   'metro.config.js',
   'scripts/build-routes.js',
   'src/navigation/NavigationProvider.tsx',
+  'src/navigation/RouteRegistry.tsx',
+  'tsconfig.json',
   'webpack.config.js',
 ];
 

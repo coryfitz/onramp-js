@@ -1,6 +1,11 @@
 const fs = require('fs');
 const path = require('path');
 const { addNativePlatforms } = require('./native');
+const {
+  defaultNativePackage,
+  humanDisplayName,
+  nativeProjectName,
+} = require('./native-config');
 const { writeFrontendManifest } = require('./project');
 const { isPythonWrapper, run } = require('./process');
 const onrampPackageJson = require('../package.json');
@@ -54,8 +59,23 @@ function renderProjectMetadata(outputDir, appName) {
   writeJson(packagePath, projectPackage);
 
   const appJson = JSON.parse(fs.readFileSync(appJsonPath, 'utf8'));
-  appJson.name = appName;
-  appJson.displayName = appName;
+  const nativeName = nativeProjectName(appName);
+  const displayName = humanDisplayName(appName);
+  const nativePackage = defaultNativePackage(nativeName);
+  appJson.name = nativeName;
+  appJson.displayName = displayName;
+  appJson.version = projectPackage.version;
+  appJson.icon = './assets/logo.png';
+  appJson.android = {
+    ...(appJson.android || {}),
+    package: nativePackage,
+    versionCode: 1,
+  };
+  appJson.ios = {
+    ...(appJson.ios || {}),
+    bundleIdentifier: nativePackage,
+    buildNumber: '1',
+  };
   writeJson(appJsonPath, appJson);
 
   const readme = fs
@@ -113,6 +133,10 @@ async function createApp({ name, output, platform = 'web' }) {
   try {
     console.log('Creating OnRamp frontend with file-based navigation...');
     fs.cpSync(templatesDir, outputDir, { recursive: true });
+    fs.renameSync(
+      path.join(outputDir, 'project_gitignore'),
+      path.join(outputDir, '.gitignore')
+    );
     fs.mkdirSync(path.join(outputDir, 'src', 'generated'), { recursive: true });
     fs.copyFileSync(
       path.join(outputDir, 'assets', 'logo.png'),

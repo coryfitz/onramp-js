@@ -41,6 +41,16 @@ The command remains attached to its Metro process; press Ctrl+C to stop it.
 The root app includes safe-area context. Keep screen content inside the
 generated safe-area provider or use `useSafeAreaInsets` for custom layouts.
 
+Native display names, versions, identifiers, and the launcher icon are defined
+in `app.json`. The icon must be a 1024×1024 PNG inside this project. OnRamp
+synchronizes those values whenever a native platform is added or run without
+replacing other native project changes.
+
+For device-only secrets, install `react-native-keychain@^10.0.0` with
+`--legacy-peer-deps` and use `onramp-js/secure-storage`. The optional adapter
+uses non-cloud iOS Keychain protection and Android Keystore-backed storage; it
+does not fall back to insecure web storage.
+
 Frontend schema and managed tooling hashes are stored in
 `.onramp/project.json`. Upgrade backups are stored in `.onramp/backups/`.
 

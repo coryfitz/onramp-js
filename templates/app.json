@@ -1,4 +1,14 @@
 {
   "name": "OnRampApp",
-  "displayName": "OnRampApp"
+  "displayName": "OnRamp App",
+  "version": "0.0.1",
+  "icon": "./assets/logo.png",
+  "android": {
+    "package": "com.onrampapp",
+    "versionCode": 1
+  },
+  "ios": {
+    "bundleIdentifier": "com.onrampapp",
+    "buildNumber": "1"
+  }
 }

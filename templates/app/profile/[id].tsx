@@ -2,7 +2,7 @@ import React from 'react';
 import { html } from 'react-strict-dom';
 import { useNavigation } from '../../src/navigation/NavigationProvider';
 
-export default function ProfilePage({ id }) {
+export default function ProfilePage({ id }: { id?: string }) {
   const { navigate, goBack, canGoBack } = useNavigation();
 
   return (
