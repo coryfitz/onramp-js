@@ -109,6 +109,12 @@ with `[iOS]` and `[Android]`. Standalone platform runs retain Metro's keyboard
 controls.
 Each native launcher prepares its first complete Metro bundle before opening
 the app, avoiding cold-start bundle timeouts on newly generated projects.
+The iOS simulator connects to Metro through the numeric IPv4 loopback address,
+avoiding repeated Fast Refresh disconnects caused by `localhost` resolution in
+iOS 26 simulator runtimes.
+On macOS, Metro also uses its native file watcher. This filters metadata-only
+dependency events that Watchman can otherwise report as empty refreshes while
+continuing to refresh normally when application source changes.
 
 The run command stays attached to the Metro process after the app launches.
 Press Ctrl+C to stop that project-owned server cleanly.

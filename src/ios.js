@@ -1080,7 +1080,11 @@ function iosBundleIdentifier(
 }
 
 function iosJsLocation(metroPort) {
-  return `localhost:${metroPort}`;
+  // iOS 26 simulator runtimes can repeatedly drop React Native's Fast Refresh
+  // connection when localhost resolves over both IPv4 and IPv6. OnRamp's iOS
+  // launcher targets simulators, whose numeric loopback reaches host Metro
+  // without invoking that hostname-resolution path.
+  return `127.0.0.1:${metroPort}`;
 }
 
 function launchIosWithMetro(

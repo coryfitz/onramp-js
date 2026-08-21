@@ -49,6 +49,13 @@ function watchmanRepairMessage(health) {
 
 function doctorWatchman(options = {}) {
   const health = inspectWatchman(options);
+  const platform = options.platform || process.platform;
+  if (platform === 'darwin') {
+    console.log(
+      'Metro will use the native macOS file watcher to keep Fast Refresh stable.'
+    );
+    return health;
+  }
   if (health.status === 'broken') {
     throw new Error(watchmanRepairMessage(health));
   }
@@ -63,7 +70,12 @@ function doctorWatchman(options = {}) {
 
 function metroWatchmanConfig(options = {}) {
   const health = inspectWatchman(options);
-  if (health.status === 'broken') {
+  const platform = options.platform || process.platform;
+  if (platform === 'darwin') {
+    console.log(
+      'Metro is using the native macOS file watcher to avoid metadata-only Fast Refresh cycles.'
+    );
+  } else if (health.status === 'broken') {
     console.warn(`Warning: ${watchmanRepairMessage(health)}`);
     console.warn('Metro is disabling Watchman and using the native file watcher.');
   } else if (health.status === 'missing') {
@@ -71,7 +83,7 @@ function metroWatchmanConfig(options = {}) {
   }
   return {
     health,
-    useWatchman: health.status === 'ready',
+    useWatchman: platform !== 'darwin' && health.status === 'ready',
   };
 }
 

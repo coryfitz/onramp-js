@@ -276,8 +276,8 @@ test('extracts the product bundle identifier from Xcode build settings', () => {
   );
 });
 
-test('passes Metro to React Native as a host and port', () => {
-  assert.equal(iosJsLocation(8082), 'localhost:8082');
+test('uses IPv4 loopback for stable iOS simulator Fast Refresh', () => {
+  assert.equal(iosJsLocation(8082), '127.0.0.1:8082');
 });
 
 test('recognizes only available iOS simulator runtimes', () => {
