@@ -970,7 +970,11 @@ function launchIosWithMetro(
   );
 }
 
-async function runIos({ name, output, metroPort, watchDiagnostics = false }) {
+async function prepareIosDevelopment({
+  name,
+  output,
+  watchDiagnostics = false,
+}) {
   const outputDir = path.resolve(output || process.cwd());
   console.log('Preparing iOS development...');
   const environment = await prepareIosEnvironment();
@@ -1006,6 +1010,24 @@ async function runIos({ name, output, metroPort, watchDiagnostics = false }) {
     simulator.id,
     environment
   );
+  return {
+    bundleIdentifier,
+    environment,
+    outputDir,
+    simulator,
+  };
+}
+
+async function launchPreparedIos(
+  prepared,
+  { metroPort, metroInteractive = true, metroLabel } = {}
+) {
+  const {
+    bundleIdentifier,
+    environment,
+    outputDir,
+    simulator,
+  } = prepared;
   console.log('Starting iOS simulator...');
   ensureIosSimulatorBooted(simulator, environment);
   showIosSimulator(simulator, environment);
@@ -1013,6 +1035,8 @@ async function runIos({ name, output, metroPort, watchDiagnostics = false }) {
     output: outputDir,
     requestedPort: metroPort,
     env: environment.env,
+    interactive: metroInteractive,
+    label: metroLabel,
   });
   console.log(`Using Metro port ${metro.port}`);
   try {
@@ -1029,7 +1053,8 @@ async function runIos({ name, output, metroPort, watchDiagnostics = false }) {
         '--no-packager',
       ],
       outputDir,
-      environment.env
+      environment.env,
+      { inheritInput: metroInteractive }
     );
     launchIosWithMetro(
       simulator.id,
@@ -1044,6 +1069,11 @@ async function runIos({ name, output, metroPort, watchDiagnostics = false }) {
     metro.stop('SIGTERM');
     throw error;
   }
+}
+
+async function runIos(options) {
+  const prepared = await prepareIosDevelopment(options);
+  return launchPreparedIos(prepared, { metroPort: options.metroPort });
 }
 
 async function repairIos({ name, output, fresh = false }) {
@@ -1096,6 +1126,8 @@ module.exports = {
   parseIosSimulatorState,
   parsePreferredIosSimulatorRuntime,
   preferredIosSimulatorRuntime,
+  launchPreparedIos,
+  prepareIosDevelopment,
   prepareIosEnvironment,
   queryEligibleIosSimulatorsWithRetry,
   repairIos,

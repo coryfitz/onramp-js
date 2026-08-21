@@ -7,6 +7,36 @@ const { startWatchDiagnostics } = require('./watch-diagnostics');
 const DEFAULT_METRO_PORT = 8081;
 const DEFAULT_BUNDLE_TIMEOUT_MS = 120000;
 
+function metroSpawnStdio({ interactive = true, label } = {}) {
+  if (label) {
+    return [interactive ? 'inherit' : 'ignore', 'pipe', 'pipe'];
+  }
+  if (interactive) {
+    return 'inherit';
+  }
+  return ['ignore', 'inherit', 'inherit'];
+}
+
+function prefixStream(source, destination, label) {
+  const prefix = `[${label}] `;
+  let pending = '';
+
+  source.setEncoding('utf8');
+  source.on('data', chunk => {
+    pending += chunk;
+    const lines = pending.split(/\r\n|\r|\n/);
+    pending = lines.pop();
+    for (const line of lines) {
+      destination.write(`${prefix}${line}\n`);
+    }
+  });
+  source.once('end', () => {
+    if (pending) {
+      destination.write(`${prefix}${pending}\n`);
+    }
+  });
+}
+
 function normalizePort(value, label = 'Metro port') {
   const port = Number(value);
   if (!Number.isInteger(port) || port < 1 || port > 65535) {
@@ -189,6 +219,8 @@ async function startMetro({
   requestedPort,
   startingPort = DEFAULT_METRO_PORT,
   env = process.env,
+  interactive = true,
+  label,
 }) {
   const outputDir = path.resolve(output || process.cwd());
   const port = await selectMetroPort(requestedPort, startingPort);
@@ -201,9 +233,14 @@ async function startMetro({
       cwd: outputDir,
       env,
       shell: false,
-      stdio: 'inherit',
+      stdio: metroSpawnStdio({ interactive, label }),
     }
   );
+
+  if (label) {
+    prefixStream(child.stdout, process.stdout, label);
+    prefixStream(child.stderr, process.stderr, label);
+  }
 
   let stopping = false;
   let diagnosticsClosed = false;
@@ -262,7 +299,9 @@ module.exports = {
   hasListener,
   isPortAvailable,
   metroBundlePath,
+  metroSpawnStdio,
   normalizePort,
+  prefixStream,
   selectMetroPort,
   startMetro,
   warmMetroBundle,

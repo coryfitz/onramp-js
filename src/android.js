@@ -868,11 +868,9 @@ function doctorAndroid() {
   return environment;
 }
 
-async function runAndroid({
+async function prepareAndroidDevelopment({
   name,
   output,
-  metroPort,
-  metroStartingPort,
   watchDiagnostics = false,
 }) {
   const outputDir = path.resolve(output || process.cwd());
@@ -885,13 +883,28 @@ async function runAndroid({
   if (enableHostClipboardSharing(environment.env)) {
     console.log('✓ Android emulator host clipboard sharing is enabled');
   }
-  await ensureAndroidEmulator(environment);
   await addNativePlatforms({ platform: 'android', name, output: outputDir });
+  return { environment, outputDir };
+}
+
+async function launchPreparedAndroid(
+  prepared,
+  {
+    metroPort,
+    metroStartingPort,
+    metroInteractive = true,
+    metroLabel,
+  } = {}
+) {
+  const { environment, outputDir } = prepared;
+  await ensureAndroidEmulator(environment);
   const metro = await startMetro({
     output: outputDir,
     requestedPort: metroPort,
     startingPort: metroStartingPort,
     env: environment.env,
+    interactive: metroInteractive,
+    label: metroLabel,
   });
   console.log(`Using Node.js v${process.versions.node} environment`);
   console.log(`Using Metro port ${metro.port}`);
@@ -907,7 +920,8 @@ async function runAndroid({
         '--no-packager',
       ],
       outputDir,
-      environment.env
+      environment.env,
+      { inheritInput: metroInteractive }
     );
     wakeAndroidEmulators(environment.adb, environment.env);
     console.log('Android app launched. Metro remains active; press Ctrl+C to stop.');
@@ -916,6 +930,14 @@ async function runAndroid({
     metro.stop('SIGTERM');
     throw error;
   }
+}
+
+async function runAndroid(options) {
+  const prepared = await prepareAndroidDevelopment(options);
+  return launchPreparedAndroid(prepared, {
+    metroPort: options.metroPort,
+    metroStartingPort: options.metroStartingPort,
+  });
 }
 
 module.exports = {
@@ -928,7 +950,9 @@ module.exports = {
   doctorAndroid,
   enableHostClipboardSharing,
   ensureAndroidEmulator,
+  launchPreparedAndroid,
   parseEmulatorVersion,
+  prepareAndroidDevelopment,
   prepareAndroidEnvironment,
   requireClipboardCapableEmulator,
   resolveAndroidEnvironment,

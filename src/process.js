@@ -11,12 +11,15 @@ function run(command, args, cwd, env = process.env, options = {}) {
     console.log(`Running: ${command} ${args.join(' ')}`);
   }
   const quiet = options.quiet === true;
+  const inheritInput = options.inheritInput !== false;
   const result = spawnSync(command, args, {
     cwd,
     env,
     shell: false,
     encoding: quiet ? 'utf8' : undefined,
-    stdio: quiet ? ['ignore', 'pipe', 'pipe'] : 'inherit',
+    stdio: quiet
+      ? ['ignore', 'pipe', 'pipe']
+      : [inheritInput ? 'inherit' : 'ignore', 'inherit', 'inherit'],
   });
 
   if (result.error) {

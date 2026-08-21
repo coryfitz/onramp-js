@@ -99,8 +99,13 @@ npx onramp-js run ios --watch-diagnostics
 Each relevant file event is printed with its exact project-relative path so a
 refresh loop can be traced to an editor, generator, or other process.
 
-`run mobile` launches iOS and Android together. iOS uses the requested port,
-when provided, and Android selects the next available port above it.
+`run mobile` checks every interactive iOS and Android prerequisite before it
+starts either app, so installation questions cannot be hidden by Metro output.
+It then launches iOS and Android together. iOS uses the requested port, when
+provided, and Android selects the next available port above it. The two Metro
+servers cannot consume terminal input, and their concurrent output is prefixed
+with `[iOS]` and `[Android]`. Standalone platform runs retain Metro's keyboard
+controls.
 Each native launcher prepares its first complete Metro bundle before opening
 the app, avoiding cold-start bundle timeouts on newly generated projects.
 

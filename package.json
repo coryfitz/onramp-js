@@ -1,6 +1,6 @@
 {
   "name": "onramp-js",
-  "version": "0.5.3",
+  "version": "0.5.4",
   "description": "Web-first universal React Native app generator for web, iOS, and Android",
   "author": "Cory Fitz",
   "license": "MIT",

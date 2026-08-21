@@ -1,7 +1,18 @@
 const fs = require('fs');
 const path = require('path');
-const { doctorAndroid, runAndroid } = require('./android');
-const { doctorIos, repairIos, runIos } = require('./ios');
+const {
+  doctorAndroid,
+  launchPreparedAndroid,
+  prepareAndroidDevelopment,
+  runAndroid,
+} = require('./android');
+const {
+  doctorIos,
+  launchPreparedIos,
+  prepareIosDevelopment,
+  repairIos,
+  runIos,
+} = require('./ios');
 const { findExecutable, run } = require('./process');
 const { doctorWatchman } = require('./watchman');
 
@@ -64,17 +75,37 @@ function runWeb(outputDir, runner = run) {
   runner('npm', ['run', 'start:web', '--', '--open'], outputDir);
 }
 
-async function runMobile(options, runners = { runIos, runAndroid }) {
+async function runMobile(options, runners = {
+  launchPreparedAndroid,
+  launchPreparedIos,
+  prepareAndroidDevelopment,
+  prepareIosDevelopment,
+}) {
   if (options.metroPort >= 65535) {
     throw new Error('Mobile development requires two available Metro ports.');
   }
+  console.log(
+    'Checking iOS and Android prerequisites before starting either app...'
+  );
+  const preparationOptions = {
+    name: options.name,
+    output: options.output,
+    watchDiagnostics: options.watchDiagnostics,
+  };
+  const preparedIos = await runners.prepareIosDevelopment(
+    preparationOptions
+  );
+  const preparedAndroid = await runners.prepareAndroidDevelopment(
+    preparationOptions
+  );
+  console.log('✓ Mobile prerequisites are ready');
+
   let iosMetro;
   try {
-    iosMetro = await runners.runIos({
-      name: options.name,
-      output: options.output,
+    iosMetro = await runners.launchPreparedIos(preparedIos, {
       metroPort: options.metroPort,
-      watchDiagnostics: options.watchDiagnostics,
+      metroInteractive: false,
+      metroLabel: 'iOS',
     });
     if (!iosMetro || !Number.isInteger(iosMetro.port)) {
       throw new Error('The iOS Metro server did not report its port.');
@@ -82,12 +113,14 @@ async function runMobile(options, runners = { runIos, runAndroid }) {
     if (iosMetro.port >= 65535) {
       throw new Error('Mobile development requires two available Metro ports.');
     }
-    const androidMetro = await runners.runAndroid({
-      name: options.name,
-      output: options.output,
-      metroStartingPort: iosMetro.port + 1,
-      watchDiagnostics: options.watchDiagnostics,
-    });
+    const androidMetro = await runners.launchPreparedAndroid(
+      preparedAndroid,
+      {
+        metroStartingPort: iosMetro.port + 1,
+        metroInteractive: false,
+        metroLabel: 'Android',
+      }
+    );
     return { android: androidMetro, ios: iosMetro };
   } catch (error) {
     if (iosMetro) {

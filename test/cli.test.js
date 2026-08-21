@@ -168,32 +168,72 @@ test('web development opens the selected local server in a browser', () => {
   ]]);
 });
 
-test('mobile runs iOS and Android on distinct Metro ports', async () => {
+test('mobile completes both preflights before starting either Metro', async () => {
   const calls = [];
+  const preparedIos = { platform: 'ios' };
+  const preparedAndroid = { platform: 'android' };
   const iosMetro = { port: 9090, stop: () => calls.push('stop-ios') };
   const androidMetro = { port: 9091, stop: () => calls.push('stop-android') };
   const result = await runMobile(
     { name: 'Example', output: '/tmp/example', metroPort: 9090 },
     {
-      runIos: async options => {
-        calls.push(['ios', options]);
+      prepareIosDevelopment: async options => {
+        calls.push(['prepare-ios', options]);
+        return preparedIos;
+      },
+      prepareAndroidDevelopment: async options => {
+        calls.push(['prepare-android', options]);
+        return preparedAndroid;
+      },
+      launchPreparedIos: async (prepared, options) => {
+        calls.push(['launch-ios', prepared, options]);
         return iosMetro;
       },
-      runAndroid: async options => {
-        calls.push(['android', options]);
+      launchPreparedAndroid: async (prepared, options) => {
+        calls.push(['launch-android', prepared, options]);
         return androidMetro;
       },
     }
   );
 
-  assert.equal(calls[0][0], 'ios');
-  assert.equal(calls[0][1].metroPort, 9090);
+  assert.deepEqual(calls.map(call => call[0]), [
+    'prepare-ios',
+    'prepare-android',
+    'launch-ios',
+    'launch-android',
+  ]);
+  assert.equal(calls[0][1].name, 'Example');
   assert.equal(calls[0][1].watchDiagnostics, undefined);
-  assert.equal(calls[1][0], 'android');
-  assert.equal(calls[1][1].metroStartingPort, 9091);
-  assert.equal(calls[1][1].metroPort, undefined);
-  assert.equal(calls[1][1].watchDiagnostics, undefined);
+  assert.equal(calls[2][1], preparedIos);
+  assert.equal(calls[2][2].metroPort, 9090);
+  assert.equal(calls[2][2].metroInteractive, false);
+  assert.equal(calls[2][2].metroLabel, 'iOS');
+  assert.equal(calls[3][1], preparedAndroid);
+  assert.equal(calls[3][2].metroStartingPort, 9091);
+  assert.equal(calls[3][2].metroInteractive, false);
+  assert.equal(calls[3][2].metroLabel, 'Android');
   assert.deepEqual(result, { android: androidMetro, ios: iosMetro });
+});
+
+test('mobile does not launch iOS when Android preflight is cancelled', async () => {
+  let launched = false;
+  await assert.rejects(
+    runMobile(
+      { name: 'Example', output: '/tmp/example' },
+      {
+        prepareIosDevelopment: async () => ({ platform: 'ios' }),
+        prepareAndroidDevelopment: async () => {
+          throw new Error('Android launch cancelled');
+        },
+        launchPreparedIos: async () => {
+          launched = true;
+        },
+      }
+    ),
+    /Android launch cancelled/
+  );
+
+  assert.equal(launched, false);
 });
 
 test('mobile stops iOS Metro if Android startup fails', async () => {
@@ -202,11 +242,15 @@ test('mobile stops iOS Metro if Android startup fails', async () => {
     runMobile(
       { name: 'Example', output: '/tmp/example' },
       {
-        runIos: async () => ({
+        prepareIosDevelopment: async () => ({ platform: 'ios' }),
+        prepareAndroidDevelopment: async () => ({ platform: 'android' }),
+        launchPreparedIos: async () => ({
           port: 8081,
           stop: signal => { stoppedWith = signal; },
         }),
-        runAndroid: async () => { throw new Error('Android failed'); },
+        launchPreparedAndroid: async () => {
+          throw new Error('Android failed');
+        },
       }
     ),
     /Android failed/

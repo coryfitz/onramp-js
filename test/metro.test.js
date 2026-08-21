@@ -1,15 +1,40 @@
 const assert = require('node:assert/strict');
 const http = require('node:http');
 const net = require('node:net');
+const { PassThrough } = require('node:stream');
 const test = require('node:test');
 
 const {
   isPortAvailable,
   metroBundlePath,
+  metroSpawnStdio,
   normalizePort,
+  prefixStream,
   selectMetroPort,
   warmMetroBundle,
 } = require('../src/metro');
+
+test('mobile Metro output is piped while terminal input stays with OnRamp', () => {
+  assert.deepEqual(
+    metroSpawnStdio({ interactive: false, label: 'iOS Metro' }),
+    ['ignore', 'pipe', 'pipe']
+  );
+  assert.equal(metroSpawnStdio(), 'inherit');
+});
+
+test('labels complete and partial Metro output lines by platform', async () => {
+  const source = new PassThrough();
+  let output = '';
+  prefixStream(source, {
+    write: value => { output += value; },
+  }, 'iOS');
+
+  source.write('ready\npartial');
+  source.end();
+  await new Promise(resolve => source.once('end', resolve));
+
+  assert.equal(output, '[iOS] ready\n[iOS] partial\n');
+});
 
 function listen(server, port = 0) {
   return new Promise((resolve, reject) => {
