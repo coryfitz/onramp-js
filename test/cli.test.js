@@ -348,6 +348,7 @@ test('offers and downloads Apple preferred iOS runtime build', async () => {
     { env: {}, xcodebuild: 'xcodebuild', xcrun: 'xcrun' },
     {
       cwd: '/tmp/example/ios',
+      runtimeDownloadCachePath: null,
       inspectRuntimes: () => {
         inspections += 1;
         return inspections === 1
@@ -377,7 +378,7 @@ test('offers and downloads Apple preferred iOS runtime build', async () => {
   );
 
   assert.equal(result.changed, true);
-  assert.match(prompts[0], /newer iOS 26\.5.*23F81a.*23F77/);
+  assert.match(prompts[0], /Xcode prefers iOS 26\.5.*23F81a.*23F77/);
   assert.deepEqual(commands[0].slice(0, 3), [
     'xcodebuild',
     [
@@ -399,6 +400,7 @@ test('retries the latest architecture-specific runtime when a build is unavailab
     { env: {}, xcodebuild: 'xcodebuild', xcrun: 'xcrun' },
     {
       architectureVariant: 'arm64',
+      runtimeDownloadCachePath: null,
       inspectRuntimes: () => {
         inspections += 1;
         return inspections === 1
@@ -442,6 +444,7 @@ test('continues with an installed runtime when an optional upgrade fails', async
     { env: {}, xcodebuild: 'xcodebuild', xcrun: 'xcrun' },
     {
       architectureVariant: 'arm64',
+      runtimeDownloadCachePath: null,
       inspectRuntimes: () => installed,
       preferredRuntime: () => ({ build: '23F81a', version: '26.5' }),
       promptYesNo: async () => true,
@@ -463,6 +466,7 @@ test('fails when neither Xcode download can provide a required runtime', async (
       { env: {}, xcodebuild: 'xcodebuild', xcrun: 'xcrun' },
       {
         architectureVariant: 'arm64',
+        runtimeDownloadCachePath: null,
         inspectRuntimes: () => [],
         preferredRuntime: () => ({ build: '23F81a', version: '26.5' }),
         promptYesNo: async () => true,
@@ -481,6 +485,7 @@ test('cancels iOS launch when runtime installation is declined', async () => {
     ensurePreferredIosSimulatorRuntime(
       { env: {}, xcodebuild: 'xcodebuild', xcrun: 'xcrun' },
       {
+        runtimeDownloadCachePath: null,
         inspectRuntimes: () => [],
         preferredRuntime: () => ({
           build: '23F81a',
@@ -492,6 +497,67 @@ test('cancels iOS launch when runtime installation is declined', async () => {
     ),
     /no Simulator runtime is installed/
   );
+});
+
+test('defers a preferred iOS runtime build that Xcode cannot provide', async t => {
+  const temporary = fs.mkdtempSync(
+    path.join(os.tmpdir(), 'onramp-ios-runtime-cache-test-')
+  );
+  t.after(() => fs.rmSync(temporary, { recursive: true, force: true }));
+  const runtimeDownloadCachePath = path.join(temporary, 'runtime.json');
+  const installed = [{
+    build: '23F77',
+    identifier: 'installed',
+    version: '26.5',
+  }];
+  const prompts = [];
+  const commands = [];
+  const logs = [];
+  let now = 1_000;
+  let preferredBuild = '23F81a';
+  const options = {
+    architectureVariant: 'arm64',
+    inspectRuntimes: () => installed,
+    preferredRuntime: () => ({ build: preferredBuild, version: '26.5' }),
+    promptYesNo: async question => {
+      prompts.push(question);
+      return true;
+    },
+    runCommand: (...args) => {
+      commands.push(args);
+      throw new Error('download unavailable');
+    },
+    log: message => logs.push(message),
+    now: () => now,
+    runtimeDownloadCachePath,
+    runtimeDownloadRetryMs: 1_000,
+  };
+  const environment = {
+    env: {},
+    version: { display: 'Xcode 26.6' },
+    xcodebuild: 'xcodebuild',
+    xcrun: 'xcrun',
+  };
+
+  await ensurePreferredIosSimulatorRuntime(environment, options);
+  await ensurePreferredIosSimulatorRuntime(environment, options);
+
+  assert.equal(prompts.length, 1);
+  assert.equal(commands.length, 2);
+  assert.match(prompts[0], /Xcode prefers.*Try to download/);
+  assert.match(logs.join('\n'), /recently reported.*could not be downloaded/);
+
+  preferredBuild = '23F82';
+  await ensurePreferredIosSimulatorRuntime(environment, options);
+
+  assert.equal(prompts.length, 2);
+  assert.equal(commands.length, 4);
+
+  now += 1_001;
+  await ensurePreferredIosSimulatorRuntime(environment, options);
+
+  assert.equal(prompts.length, 3);
+  assert.equal(commands.length, 6);
 });
 
 test('offers the Xcode App Store page when Simulator itself is missing', async () => {

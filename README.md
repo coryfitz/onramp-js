@@ -120,7 +120,10 @@ selecting a simulator on the newest runtime. Runtime downloads request Apple's
 exact build and explicitly select the host architecture; if that build is not
 downloadable, OnRamp retries Xcode's latest compatible runtime. A failed
 optional upgrade does not prevent launch when a usable runtime is already
-installed. If Xcode itself is missing, OnRamp can open its Mac App Store page
+installed. When Xcode rejects both download forms, OnRamp remembers that exact
+Xcode/preferred/installed build combination for 24 hours instead of repeatedly
+offering it. Changed Xcode or runtime metadata is checked immediately. If Xcode
+itself is missing, OnRamp can open its Mac App Store page
 after asking; Apple still requires the user to complete the Xcode installation.
 
 The Android command checks Google's stable SDK package list on every launch.

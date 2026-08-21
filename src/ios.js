@@ -1,4 +1,5 @@
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const { addNativePlatforms } = require('./native');
 const { startMetro, warmMetroBundle } = require('./metro');
@@ -7,6 +8,7 @@ const { promptYesNo } = require('./prompt');
 
 const IOS_DESTINATION_QUERY_ATTEMPTS = 3;
 const IOS_DESTINATION_RETRY_DELAY_MS = 500;
+const IOS_RUNTIME_DOWNLOAD_RETRY_MS = 24 * 60 * 60 * 1000;
 
 function requireDarwin() {
   if (process.platform !== 'darwin') {
@@ -414,6 +416,96 @@ function iosRuntimeDescription(runtime) {
     + (runtime.build ? ' build ' + runtime.build : '');
 }
 
+function iosRuntimeDownloadCachePath(home = os.homedir()) {
+  return path.join(
+    home,
+    'Library',
+    'Caches',
+    'OnRamp',
+    'ios-runtime-download.json'
+  );
+}
+
+function iosRuntimeDownloadSignature(
+  environment,
+  preferred,
+  installed,
+  architectureVariant
+) {
+  return JSON.stringify({
+    architectureVariant,
+    installedBuild: installed && installed.build || null,
+    installedVersion: installed && installed.version || null,
+    preferredBuild: preferred && preferred.build || null,
+    preferredVersion: preferred && preferred.version || null,
+    xcode: environment.version && environment.version.display
+      || environment.xcodebuild,
+  });
+}
+
+function deferredIosRuntimeDownload(cachePath, signature, now = Date.now()) {
+  if (!cachePath) {
+    return null;
+  }
+  try {
+    const cached = JSON.parse(fs.readFileSync(cachePath, 'utf8'));
+    if (
+      cached.schemaVersion === 1
+      && cached.signature === signature
+      && Number(cached.retryAfter) > now
+    ) {
+      return cached;
+    }
+  } catch (_error) {
+    // A missing or invalid advisory cache must never block native launch.
+  }
+  return null;
+}
+
+function deferIosRuntimeDownload(
+  cachePath,
+  signature,
+  now = Date.now(),
+  retryMs = IOS_RUNTIME_DOWNLOAD_RETRY_MS
+) {
+  if (!cachePath) {
+    return null;
+  }
+  const temporary = `${cachePath}.${process.pid}.tmp`;
+  const retryAfter = now + retryMs;
+  try {
+    fs.mkdirSync(path.dirname(cachePath), { recursive: true });
+    fs.writeFileSync(
+      temporary,
+      JSON.stringify({
+        retryAfter,
+        schemaVersion: 1,
+        signature,
+      }) + '\n'
+    );
+    fs.renameSync(temporary, cachePath);
+    return retryAfter;
+  } catch (_error) {
+    try {
+      fs.rmSync(temporary, { force: true });
+    } catch (_cleanupError) {
+      // Ignore advisory cache cleanup failures.
+    }
+    return null;
+  }
+}
+
+function clearIosRuntimeDownloadDeferral(cachePath) {
+  if (!cachePath) {
+    return;
+  }
+  try {
+    fs.rmSync(cachePath, { force: true });
+  } catch (_error) {
+    // A stale advisory cache must never block native launch.
+  }
+}
+
 async function ensurePreferredIosSimulatorRuntime(
   environment,
   options = {}
@@ -427,6 +519,12 @@ async function ensurePreferredIosSimulatorRuntime(
   const log = options.log || console.log;
   const architectureVariant = options.architectureVariant
     || iosRuntimeArchitectureVariant();
+  const cachePath = Object.hasOwn(options, 'runtimeDownloadCachePath')
+    ? options.runtimeDownloadCachePath
+    : iosRuntimeDownloadCachePath();
+  const now = options.now || Date.now;
+  const retryMs = options.runtimeDownloadRetryMs
+    ?? IOS_RUNTIME_DOWNLOAD_RETRY_MS;
   const preferred = findPreferred(environment);
   let installed = inspect(environment);
   if (!preferred || installed === null) {
@@ -440,6 +538,7 @@ async function ensurePreferredIosSimulatorRuntime(
   if (installed.some(runtime => (
     iosRuntimeMatchesPreferred(runtime, preferred)
   ))) {
+    clearIosRuntimeDownloadDeferral(cachePath);
     log(
       '✓ Latest compatible iOS Simulator runtime is installed (iOS '
       + preferred.version
@@ -451,6 +550,28 @@ async function ensurePreferredIosSimulatorRuntime(
   const current = installed.slice().sort((left, right) => (
     compareIosVersions(right.version, left.version)
   ))[0];
+  const downloadSignature = iosRuntimeDownloadSignature(
+    environment,
+    preferred,
+    current,
+    architectureVariant
+  );
+  const deferred = current && deferredIosRuntimeDownload(
+    cachePath,
+    downloadSignature,
+    now()
+  );
+  if (deferred) {
+    log(
+      'Xcode recently reported that its preferred '
+      + iosRuntimeDescription(preferred)
+      + ' could not be downloaded. Continuing with installed '
+      + iosRuntimeDescription(current) + '; OnRamp will try this build '
+      + 'again after ' + new Date(deferred.retryAfter).toISOString() + '.'
+    );
+    return { changed: false, installed, preferred };
+  }
+
   let question;
   if (!current) {
     question = (
@@ -462,10 +583,10 @@ async function ensurePreferredIosSimulatorRuntime(
     && preferred.build
   ) {
     question = (
-      'A newer iOS ' + preferred.version
-      + ' Simulator runtime build is available ('
-      + preferred.build + '; installed ' + (current.build || 'unknown')
-      + '). Upgrade now? This can be several GB. (y/N): '
+      'Xcode prefers iOS ' + preferred.version
+      + ' Simulator runtime build ' + preferred.build
+      + ' (installed ' + (current.build || 'unknown')
+      + '). Try to download it now? This can be several GB. (y/N): '
     );
   } else {
     question = (
@@ -526,9 +647,19 @@ async function ensurePreferredIosSimulatorRuntime(
       );
     } catch (latestDownloadError) {
       if (current) {
+        const retryAfter = deferIosRuntimeDownload(
+          cachePath,
+          downloadSignature,
+          now(),
+          retryMs
+        );
         log(
-          'Xcode could not upgrade the iOS Simulator runtime. Continuing '
-          + 'with installed ' + iosRuntimeDescription(current) + '.'
+          'Xcode could not provide its preferred iOS Simulator runtime. '
+          + 'Continuing with installed ' + iosRuntimeDescription(current)
+          + (retryAfter
+            ? '; OnRamp will try this build again after '
+              + new Date(retryAfter).toISOString() + '.'
+            : '.')
         );
         return { changed: false, installed, preferred };
       }
@@ -544,6 +675,7 @@ async function ensurePreferredIosSimulatorRuntime(
     iosRuntimeMatchesPreferred(runtime, preferred)
   ));
   if (matchingRuntime) {
+    clearIosRuntimeDownloadDeferral(cachePath);
     log('✓ iOS Simulator runtime ' + preferred.version + ' installed');
     return { changed: true, installed, preferred };
   }
@@ -559,6 +691,14 @@ async function ensurePreferredIosSimulatorRuntime(
       'Xcode did not install the preferred runtime build. Continuing with '
       + iosRuntimeDescription(usableRuntime) + '.'
     );
+    if (!changed) {
+      deferIosRuntimeDownload(
+        cachePath,
+        downloadSignature,
+        now(),
+        retryMs
+      );
+    }
     return { changed, installed, preferred };
   }
   if (current) {
