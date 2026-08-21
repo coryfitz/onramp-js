@@ -142,14 +142,19 @@ launch and, when necessary, offers to replace it for the native architecture.
 After approval, OnRamp removes only the incompatible Emulator SDK package,
 installs the native package, and verifies its executable; AVDs and system
 images remain untouched. URL or checksum mismatch output from the Android CLI
-is treated as failure even when that process exits with status zero. OnRamp
-then enables host clipboard sharing and cold-starts the selected emulator. The
-cold start bypasses stale Quick Boot state without wiping the virtual device's
-apps or data. If the Emulator exits during startup, OnRamp reports its
-diagnostic output immediately; a genuine boot timeout includes the diagnostics
-collected while it was running. Android Emulator 33.1.23 or newer is required
-for reliable host clipboard transport. Broken AVD entries and preview or
-codename images are not selected.
+is treated as failure even when that process exits with status zero. New AVDs
+use the newest regular Pixel profile exposed by Android's tools. OnRamp detects
+generic low-resolution AVDs that blur when scaled, offers to create a sharper
+replacement from the installed system image, preserves the old device and its
+app data, and prefers the sharper matching device. App installation explicitly
+targets that selected emulator even when another device is online. OnRamp then
+enables host clipboard sharing and cold-starts the selected emulator. The cold start
+bypasses stale Quick Boot state without wiping the virtual device's apps or
+data. If the Emulator exits during startup, OnRamp reports its diagnostic
+output immediately; a genuine boot timeout includes the diagnostics collected
+while it was running. Android Emulator 33.1.23 or newer is required for
+reliable host clipboard transport. Broken AVD entries and preview or codename
+images are not selected.
 
 If an iOS dependency installation needs to be rebuilt:
 
@@ -192,6 +197,10 @@ registry;
 
 The generated root uses `SafeAreaProvider` and `SafeAreaView` so its first iOS
 screen respects device insets by default.
+
+On native platforms, navigation to the initial route resets the in-memory
+stack. Generated Home controls therefore return to the root reliably, and the
+not-found screen uses shared navigation rather than browser-only globals.
 
 On web, React Strict DOM `css.create` rules are injected into the page by the
 StyleX transform. Files placed in `assets/` are served by the development

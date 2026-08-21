@@ -6,6 +6,7 @@ const test = require('node:test');
 const {
   androidEmulatorArchitectureMismatch,
   androidEmulatorLaunchArgs,
+  androidRunArguments,
   compareVersions,
   connectedAndroidEmulators,
   enableHostClipboardSharing,
@@ -176,6 +177,18 @@ test('cold-launches an AVD and waits for Android to finish booting', async () =>
   assert.deepEqual(spawns[0][1], androidEmulatorLaunchArgs(environment.avd));
   assert.deepEqual(spawns[0][2].stdio, ['ignore', 'ignore', 'pipe']);
   assert.ok(captures.some(([, args]) => args.includes('sys.boot_completed')));
+});
+
+test('runs React Native on the selected Android emulator only', () => {
+  assert.deepEqual(androidRunArguments(8081, 'emulator-5556'), [
+    'react-native',
+    'run-android',
+    '--device',
+    'emulator-5556',
+    '--port',
+    '8081',
+    '--no-packager',
+  ]);
 });
 
 test('reports an Android Emulator fatal error without waiting for boot timeout', async () => {

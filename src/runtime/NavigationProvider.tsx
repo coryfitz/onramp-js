@@ -1,5 +1,6 @@
 // src/navigation/NavigationProvider.tsx
 import React, { createContext, useContext, useMemo, useRef, useEffect, useState } from 'react';
+import { nextNativeNavigationStack } from '../navigation-state';
 
 type NavAPI = {
   currentRoute: string;
@@ -56,8 +57,13 @@ export function NavigationProvider({
       return;
     }
 
-    // Native: just manage the in-memory stack/state
-    stackRef.current.push(path);
+    // Native root navigation is a reset, so Home cannot leave stale screens
+    // behind it or become a no-op after a malformed history transition.
+    stackRef.current = nextNativeNavigationStack(
+      stackRef.current,
+      path,
+      initialRoute,
+    );
     setCurrentRoute(path);
   };
 

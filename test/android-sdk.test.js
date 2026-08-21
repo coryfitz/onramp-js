@@ -15,7 +15,13 @@ const {
   removeAndroidSdkPackages,
   runAndroidSdkInstall,
 } = require('../src/android-sdk');
-const { prepareAndroidEnvironment } = require('../src/android');
+const {
+  androidAvdMetadata,
+  parseAndroidDeviceProfiles,
+  preferredAndroidPhoneProfile,
+  prepareAndroidEnvironment,
+  selectAndroidAvd,
+} = require('../src/android');
 const { capture } = require('../src/process');
 
 test('finds Google command-line tools for the current host repository', () => {
@@ -304,6 +310,48 @@ test('passes explicit input to native package tools', () => {
   assert.equal(result.stdout, 'no\n');
 });
 
+test('selects the newest regular Pixel device profile', () => {
+  const profiles = parseAndroidDeviceProfiles([
+    'id: 15 or "medium_phone"',
+    '    Name: Medium Phone',
+    '---------',
+    'id: 53 or "pixel_9"',
+    '    Name: Pixel 9',
+    '---------',
+    'id: 54 or "pixel_9_pro"',
+    '    Name: Pixel 9 Pro',
+    '---------',
+    'id: 57 or "pixel_10"',
+    '    Name: Pixel 10',
+  ].join('\n'));
+
+  assert.deepEqual(profiles, [
+    'medium_phone',
+    'pixel_9',
+    'pixel_9_pro',
+    'pixel_10',
+  ]);
+  assert.equal(preferredAndroidPhoneProfile(profiles), 'pixel_10');
+});
+
+test('prefers a sharp AVD when API versions match', () => {
+  const packagePath = 'system-images;android-37;google_apis;arm64-v8a';
+  const selected = selectAndroidAvd(
+    ['Generic', 'Pixel'],
+    '/sdk',
+    {},
+    avd => ({
+      avd,
+      display: { sharp: avd === 'Pixel' },
+      packagePath,
+      stable: true,
+      valid: true,
+    })
+  );
+
+  assert.equal(selected, 'Pixel');
+});
+
 test('offers and installs an available Android Emulator upgrade', async t => {
   const temporary = fs.mkdtempSync(
     path.join(os.tmpdir(), 'onramp-android-sdk-test-')
@@ -363,6 +411,9 @@ test('offers and installs an available Android Emulator upgrade', async t => {
   fs.writeFileSync(
     path.join(avdDirectory, 'config.ini'),
     'image.sysdir.1=' + imageRelative + '\n'
+    + 'hw.lcd.width=1080\n'
+    + 'hw.lcd.height=2400\n'
+    + 'hw.lcd.density=420\n'
   );
 
   const packageMap = new Map([
@@ -493,6 +544,9 @@ test('offers to repair an Android Emulator installed for the wrong Mac architect
   fs.writeFileSync(
     path.join(avdDirectory, 'config.ini'),
     'image.sysdir.1=' + imageRelative + '\n'
+    + 'hw.lcd.width=1080\n'
+    + 'hw.lcd.height=2400\n'
+    + 'hw.lcd.density=420\n'
   );
 
   const packageMap = new Map([
@@ -688,8 +742,16 @@ test('offers to install a missing Android emulator, image, and AVD', async t => 
           stderr: '',
         };
       }
+      if (command === avdManager && args[0] === 'list') {
+        return {
+          status: 0,
+          stdout: 'id: 53 or "pixel_9"\n    Name: Pixel 9\n',
+          stderr: '',
+        };
+      }
       if (command === avdManager && args[0] === 'create') {
         assert.equal(options.input, 'no\n');
+        assert.equal(args[args.indexOf('--device') + 1], 'pixel_9');
         const avdDirectory = path.join(avdHome, avdName + '.avd');
         fs.mkdirSync(avdDirectory, { recursive: true });
         fs.writeFileSync(
@@ -699,6 +761,9 @@ test('offers to install a missing Android emulator, image, and AVD', async t => 
         fs.writeFileSync(
           path.join(avdDirectory, 'config.ini'),
           'image.sysdir.1=' + imageRelative + '\n'
+          + 'hw.lcd.width=1080\n'
+          + 'hw.lcd.height=2400\n'
+          + 'hw.lcd.density=420\n'
         );
         avdCreated = true;
         return { status: 0, stdout: '', stderr: '' };
@@ -735,4 +800,165 @@ test('offers to install a missing Android emulator, image, and AVD', async t => 
     [imagePackage],
   ]);
   assert.equal(environment.avd, avdName);
+});
+
+test('offers a sharp replacement for a generic low-resolution AVD', async t => {
+  const temporary = fs.mkdtempSync(
+    path.join(os.tmpdir(), 'onramp-android-display-test-')
+  );
+  t.after(() => fs.rmSync(temporary, { recursive: true, force: true }));
+  const sdk = path.join(temporary, 'sdk');
+  const javaHome = path.join(temporary, 'jdk');
+  const avdHome = path.join(temporary, 'avd-home');
+  const commandExtension = process.platform === 'win32' ? '.bat' : '';
+  const executableExtension = process.platform === 'win32' ? '.exe' : '';
+  const sdkManager = path.join(
+    sdk,
+    'cmdline-tools',
+    'latest',
+    'bin',
+    'sdkmanager' + commandExtension
+  );
+  const avdManager = path.join(
+    path.dirname(sdkManager),
+    'avdmanager' + commandExtension
+  );
+  const emulator = path.join(
+    sdk,
+    'emulator',
+    'emulator' + executableExtension
+  );
+  const adb = path.join(
+    sdk,
+    'platform-tools',
+    'adb' + executableExtension
+  );
+  const java = path.join(
+    javaHome,
+    'bin',
+    'java' + executableExtension
+  );
+  const architecture = os.arch() === 'arm64' ? 'arm64-v8a' : 'x86_64';
+  const imagePackage = [
+    'system-images',
+    'android-37',
+    'google_apis',
+    architecture,
+  ].join(';');
+  const imageRelative = imagePackage.replaceAll(';', path.sep) + path.sep;
+  const oldAvd = 'OnRamp_API_37';
+  const newAvd = 'OnRamp_API_37_2';
+  const oldDirectory = path.join(avdHome, oldAvd + '.avd');
+  let replacementCreated = false;
+
+  for (const filePath of [sdkManager, avdManager, emulator, adb, java]) {
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, '');
+  }
+  fs.mkdirSync(path.join(sdk, imageRelative), { recursive: true });
+  fs.mkdirSync(oldDirectory, { recursive: true });
+  fs.writeFileSync(
+    path.join(avdHome, oldAvd + '.ini'),
+    'path=' + oldDirectory + '\n'
+  );
+  fs.writeFileSync(
+    path.join(oldDirectory, 'config.ini'),
+    'image.sysdir.1=' + imageRelative + '\n'
+    + 'hw.lcd.width=320\n'
+    + 'hw.lcd.height=640\n'
+    + 'hw.lcd.density=160\n'
+  );
+  fs.writeFileSync(path.join(oldDirectory, 'user-data-marker'), 'preserve');
+
+  const packageMap = new Map([
+    ['emulator', { path: 'emulator', installedVersion: '37.1.11' }],
+    [
+      'platform-tools',
+      { path: 'platform-tools', installedVersion: '37.0.1' },
+    ],
+    [imagePackage, { path: imagePackage, installedVersion: '10' }],
+  ]);
+  const prompts = [];
+  const installs = [];
+
+  const environment = await prepareAndroidEnvironment({
+    sdk,
+    javaHome,
+    env: { ANDROID_AVD_HOME: avdHome, PATH: '' },
+    captureFn: (command, args, options = {}) => {
+      if (command === sdkManager && args[0] === '--version') {
+        return { status: 0, stdout: '23.0\n', stderr: '' };
+      }
+      if (command === emulator && args[0] === '-version') {
+        return {
+          status: 0,
+          stdout: 'Android emulator version 37.1.11.0\n',
+          stderr: '',
+        };
+      }
+      if (command === emulator && args[0] === '-list-avds') {
+        return {
+          status: 0,
+          stdout: replacementCreated
+            ? oldAvd + '\n' + newAvd + '\n'
+            : oldAvd + '\n',
+          stderr: '',
+        };
+      }
+      if (command === avdManager && args[0] === 'list') {
+        return {
+          status: 0,
+          stdout: [
+            'id: 53 or "pixel_9"',
+            '    Name: Pixel 9',
+            'id: 57 or "pixel_10"',
+            '    Name: Pixel 10',
+          ].join('\n'),
+          stderr: '',
+        };
+      }
+      if (command === avdManager && args[0] === 'create') {
+        assert.equal(options.input, 'no\n');
+        assert.equal(args[args.indexOf('--name') + 1], newAvd);
+        assert.equal(args[args.indexOf('--device') + 1], 'pixel_10');
+        const newDirectory = path.join(avdHome, newAvd + '.avd');
+        fs.mkdirSync(newDirectory, { recursive: true });
+        fs.writeFileSync(
+          path.join(avdHome, newAvd + '.ini'),
+          'path=' + newDirectory + '\n'
+        );
+        fs.writeFileSync(
+          path.join(newDirectory, 'config.ini'),
+          'image.sysdir.1=' + imageRelative + '\n'
+          + 'hw.lcd.width=1080\n'
+          + 'hw.lcd.height=2424\n'
+          + 'hw.lcd.density=420\n'
+        );
+        replacementCreated = true;
+        return { status: 0, stdout: '', stderr: '' };
+      }
+      return { status: 0, stdout: '', stderr: '' };
+    },
+    listPackages: () => packageMap,
+    installPackages: async (_manager, _sdk, _env, selected) => {
+      installs.push(selected);
+    },
+    promptYesNo: async question => {
+      prompts.push(question);
+      return true;
+    },
+    log: () => {},
+  });
+
+  const oldMetadata = androidAvdMetadata(oldAvd, sdk, {
+    ANDROID_AVD_HOME: avdHome,
+  });
+  assert.equal(oldMetadata.display.sharp, false);
+  assert.match(prompts[0], /320x640 at 160 dpi.*look fuzzy/);
+  assert.deepEqual(installs, []);
+  assert.equal(environment.avd, newAvd);
+  assert.equal(
+    fs.readFileSync(path.join(oldDirectory, 'user-data-marker'), 'utf8'),
+    'preserve'
+  );
 });

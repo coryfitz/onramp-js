@@ -23,6 +23,8 @@ const { promptYesNo } = require('./prompt');
 const MIN_CLIPBOARD_EMULATOR_VERSION = [33, 1, 23];
 const EMULATOR_BOOT_TIMEOUT_MS = 180000;
 const EMULATOR_BOOT_POLL_MS = 1000;
+const MIN_SHARP_AVD_DENSITY = 280;
+const MIN_SHARP_AVD_SHORT_SIDE = 720;
 
 function parseEmulatorVersion(output) {
   const match = `${output}`.match(
@@ -137,6 +139,61 @@ function parseIni(contents) {
   return values;
 }
 
+function androidAvdDisplay(config) {
+  const numberValue = key => {
+    const value = Number(config.get(key));
+    return Number.isFinite(value) && value > 0 ? value : null;
+  };
+  const width = numberValue('hw.lcd.width');
+  const height = numberValue('hw.lcd.height');
+  const density = numberValue('hw.lcd.density');
+  const sharp = (
+    width !== null
+    && height !== null
+    && density !== null
+    && Math.min(width, height) >= MIN_SHARP_AVD_SHORT_SIDE
+    && density >= MIN_SHARP_AVD_DENSITY
+  );
+  return { density, height, sharp, width };
+}
+
+function parseAndroidDeviceProfiles(output) {
+  const profiles = [];
+  for (const match of String(output).matchAll(
+    /^\s*id:\s+\d+\s+or\s+"([^"]+)"/gm
+  )) {
+    profiles.push(match[1]);
+  }
+  return profiles;
+}
+
+function preferredAndroidPhoneProfile(profiles) {
+  const available = new Set(profiles);
+  const regularPixels = profiles
+    .map(profile => {
+      const match = profile.match(/^pixel_(\d+)$/);
+      return match ? { profile, version: Number(match[1]) } : null;
+    })
+    .filter(Boolean)
+    .sort((left, right) => right.version - left.version);
+  if (regularPixels.length > 0) {
+    return regularPixels[0].profile;
+  }
+  for (const fallback of [
+    'medium_phone',
+    'pixel',
+    'pixel_6',
+    'pixel_5',
+    'Nexus 6P',
+    'Nexus 6',
+  ]) {
+    if (available.has(fallback)) {
+      return fallback;
+    }
+  }
+  return null;
+}
+
 function androidAvdHome(env) {
   if (env.ANDROID_AVD_HOME) {
     return path.resolve(env.ANDROID_AVD_HOME);
@@ -171,6 +228,7 @@ function androidAvdMetadata(avd, sdk, env) {
   }
 
   const config = parseIni(fs.readFileSync(configPath, 'utf8'));
+  const display = androidAvdDisplay(config);
   const configuredImage = config.get('image.sysdir.1');
   if (!configuredImage) {
     return { avd, directory, valid: false };
@@ -188,6 +246,7 @@ function androidAvdMetadata(avd, sdk, env) {
   return {
     avd,
     directory,
+    display,
     image,
     packagePath: imageMatch
       ? ['system-images', ...imageMatch.slice(1)].join(';')
@@ -208,10 +267,15 @@ function selectAndroidAvd(avds, sdk, env, metadataFn = androidAvdMetadata) {
       const rightDetails = right.packagePath
         ? androidSystemImageDetails({ path: right.packagePath })
         : null;
-      return compareVersions(
+      const apiComparison = compareVersions(
         rightDetails ? rightDetails.api : [],
         leftDetails ? leftDetails.api : []
       );
+      if (apiComparison !== 0) {
+        return apiComparison;
+      }
+      return Number(Boolean(right.display && right.display.sharp))
+        - Number(Boolean(left.display && left.display.sharp));
     });
   if (stable.length > 0) {
     return stable[0].avd;
@@ -282,6 +346,18 @@ function runningAndroidAvdSerial(environment, captureFn = capture) {
 
 function androidEmulatorLaunchArgs(avd) {
   return [`@${avd}`, '-no-snapshot-load'];
+}
+
+function androidRunArguments(port, device) {
+  return [
+    'react-native',
+    'run-android',
+    '--device',
+    device,
+    '--port',
+    String(port),
+    '--no-packager',
+  ];
 }
 
 function androidEmulatorStartupMonitor(child) {
@@ -614,7 +690,26 @@ function createAndroidAvd(
     );
   }
   const name = nextAndroidAvdName(systemImage.api, avds);
-  log('Creating Android virtual device ' + name + '...');
+  const deviceResult = captureFn(
+    avdManager,
+    ['list', 'device'],
+    { env: environment.env, check: false }
+  );
+  const device = deviceResult.status === 0
+    ? preferredAndroidPhoneProfile(
+      parseAndroidDeviceProfiles(deviceResult.stdout)
+    )
+    : null;
+  if (!device) {
+    throw new Error(
+      'Android avdmanager did not provide a modern phone device profile. '
+      + 'Update the Android SDK command-line tools and try again.'
+    );
+  }
+  log(
+    'Creating Android virtual device ' + name
+    + ' with device profile ' + device + '...'
+  );
   captureFn(
     avdManager,
     [
@@ -624,6 +719,8 @@ function createAndroidAvd(
       name,
       '--package',
       systemImage.packageInfo.path,
+      '--device',
+      device,
       '--force',
     ],
     {
@@ -916,8 +1013,14 @@ async function prepareAndroidEnvironment(options = {}) {
       );
     }
   } else {
-    const matchingAvd = stableAvds.find(metadata => (
+    const matchingImageAvds = stableAvds.filter(metadata => (
       metadata.packagePath === preferredImage.packageInfo.path
+    ));
+    const matchingAvd = matchingImageAvds.find(metadata => (
+      metadata.display && metadata.display.sharp
+    ));
+    const lowResolutionAvd = matchingImageAvds.find(metadata => (
+      !metadata.display || !metadata.display.sharp
     ));
     const imageNeedsUpdate = androidPackageNeedsUpdate(
       preferredImage.packageInfo
@@ -937,7 +1040,22 @@ async function prepareAndroidEnvironment(options = {}) {
           androidAvdApi(left)
         ))[0];
       let question;
-      if (!current) {
+      if (lowResolutionAvd && !imageNeedsInstall) {
+        const display = lowResolutionAvd.display || {};
+        const dimensions = display.width && display.height
+          ? display.width + 'x' + display.height
+          : 'an unknown resolution';
+        const density = display.density
+          ? ' at ' + display.density + ' dpi'
+          : '';
+        question = (
+          'Android virtual device ' + lowResolutionAvd.avd + ' uses '
+          + dimensions + density + ', which can look fuzzy when scaled. '
+          + 'Create a sharper Pixel-class device now? The installed system '
+          + 'image will be reused and the old device and its app data will '
+          + 'remain available. (y/N): '
+        );
+      } else if (!current) {
         question = (
           'No usable Android virtual device is installed. Install the latest '
           + 'stable Android API ' + latestApi
@@ -1108,7 +1226,7 @@ async function launchPreparedAndroid(
   } = {}
 ) {
   const { environment, outputDir } = prepared;
-  await ensureAndroidEmulator(environment);
+  const device = await ensureAndroidEmulator(environment);
   const metro = await startMetro({
     output: outputDir,
     requestedPort: metroPort,
@@ -1123,13 +1241,7 @@ async function launchPreparedAndroid(
     await warmMetroBundle({ port: metro.port, platform: 'android' });
     run(
       'npx',
-      [
-        'react-native',
-        'run-android',
-        '--port',
-        String(metro.port),
-        '--no-packager',
-      ],
+      androidRunArguments(metro.port, device),
       outputDir,
       environment.env,
       { inheritInput: metroInteractive }
@@ -1153,11 +1265,13 @@ async function runAndroid(options) {
 
 module.exports = {
   androidAvdApi,
+  androidAvdDisplay,
   androidAvdMetadata,
   androidEmulatorArchitectureMismatch,
   androidEmulatorLaunchArgs,
   androidEmulatorAvdName,
   androidHostExecutableArchitecture,
+  androidRunArguments,
   compareVersions,
   connectedAndroidEmulators,
   doctorAndroid,
@@ -1166,6 +1280,8 @@ module.exports = {
   launchPreparedAndroid,
   parseMachOArchitectures,
   parseEmulatorVersion,
+  parseAndroidDeviceProfiles,
+  preferredAndroidPhoneProfile,
   prepareAndroidDevelopment,
   prepareAndroidEnvironment,
   requireClipboardCapableEmulator,

@@ -2,6 +2,7 @@
 import React, { lazy, ComponentType, useState, useEffect } from 'react';
 import { routes, routeComponents } from '../generated/routes';
 import { html } from 'react-strict-dom';
+import { useNavigation } from './NavigationProvider';
 
 // Cache for loaded components
 const componentCache = new Map<string, ComponentType<any>>();
@@ -118,6 +119,8 @@ function LoadingScreen() {
 
 // 404 Not Found component
 function NotFoundScreen({ path }: { path: string }) {
+  const { navigate } = useNavigation();
+
   return (
     <html.div
       style={{
@@ -151,7 +154,7 @@ function NotFoundScreen({ path }: { path: string }) {
           The page "{path}" could not be found.
         </html.p>
         <html.button
-          onClick={() => { if (typeof window !== 'undefined') window.location.href = '/'; }}
+          onClick={() => navigate('/')}
           style={{
             padding: '12px 24px',
             backgroundColor: '#007AFF',
