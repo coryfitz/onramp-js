@@ -2,16 +2,23 @@ name: Publish to npm
 
 on:
   push:
-    tags:
-      - "v*"
+    branches:
+      - main
+  workflow_dispatch:
 
 permissions:
   contents: read
-  id-token: write
+
+concurrency:
+  group: publish-${{ github.repository }}
+  cancel-in-progress: false
 
 jobs:
-  publish:
+  check_version:
     runs-on: ubuntu-latest
+    outputs:
+      publish: ${{ steps.registry.outputs.publish }}
+      version: ${{ steps.registry.outputs.version }}
 
     steps:
       - uses: actions/checkout@v6
@@ -22,9 +29,52 @@ jobs:
           registry-url: "https://registry.npmjs.org"
           package-manager-cache: false
 
-      - name: Verify tag matches package version
+      - name: Check whether this version is already on npm
+        id: registry
         run: |
-          package_version="$(node -p "require('./package.json').version")"
-          test "v${package_version}" = "${GITHUB_REF_NAME}"
+          node <<'NODE'
+          const { execFileSync } = require("node:child_process");
+          const { appendFileSync } = require("node:fs");
+          const packageMetadata = require("./package.json");
+          const registryOutput = execFileSync(
+            "npm",
+            ["view", packageMetadata.name, "versions", "--json"],
+            { encoding: "utf8", stdio: ["ignore", "pipe", "inherit"] },
+          );
+          const registryValue = JSON.parse(registryOutput);
+          const publishedVersions = Array.isArray(registryValue)
+            ? registryValue
+            : [registryValue];
+          const alreadyPublished = publishedVersions.includes(packageMetadata.version);
+
+          console.log(
+            `${packageMetadata.name}@${packageMetadata.version} ` +
+              (alreadyPublished ? "is already published." : "is new and will be published."),
+          );
+          appendFileSync(
+            process.env.GITHUB_OUTPUT,
+            `version=${packageMetadata.version}\npublish=${String(!alreadyPublished)}\n`,
+          );
+          NODE
+
+  publish:
+    needs: check_version
+    if: needs.check_version.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          registry-url: "https://registry.npmjs.org"
+          package-manager-cache: false
+
+      - name: Run tests
+        run: npm test
 
       - run: npm publish
