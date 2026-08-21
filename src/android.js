@@ -30,6 +30,62 @@ function parseEmulatorVersion(output) {
   return match ? match.slice(1).map(value => Number(value || 0)) : null;
 }
 
+function androidHostExecutableArchitecture(architecture = os.arch()) {
+  if (architecture === 'arm64') {
+    return 'arm64';
+  }
+  if (architecture === 'x64') {
+    return 'x86_64';
+  }
+  if (architecture === 'ia32') {
+    return 'i386';
+  }
+  return null;
+}
+
+function parseMachOArchitectures(output) {
+  return [...new Set(
+    String(output).match(/\b(?:arm64|x86_64|i386)\b/g) || []
+  )];
+}
+
+function androidEmulatorArchitectureMismatch(
+  emulator,
+  env,
+  options = {}
+) {
+  const platform = options.platform || process.platform;
+  if (platform !== 'darwin') {
+    return null;
+  }
+  const expected = androidHostExecutableArchitecture(
+    options.architecture || os.arch()
+  );
+  if (!expected) {
+    return null;
+  }
+  const lipo = options.lipo || '/usr/bin/lipo';
+  const pathExists = options.pathExists || fs.existsSync;
+  if (!pathExists(lipo)) {
+    return null;
+  }
+  const captureFn = options.captureFn || capture;
+  const result = captureFn(lipo, ['-archs', emulator], {
+    env,
+    check: false,
+  });
+  if (result.status !== 0) {
+    return null;
+  }
+  const installed = parseMachOArchitectures(
+    `${result.stdout}\n${result.stderr}`
+  );
+  if (installed.length === 0 || installed.includes(expected)) {
+    return null;
+  }
+  return { expected, installed };
+}
+
 function requireClipboardCapableEmulator(emulator, env, captureFn = capture) {
   const result = captureFn(emulator, ['-version'], { env });
   const version = parseEmulatorVersion(`${result.stdout}\n${result.stderr}`);
@@ -227,6 +283,66 @@ function androidEmulatorLaunchArgs(avd) {
   return [`@${avd}`, '-no-snapshot-load'];
 }
 
+function androidEmulatorStartupMonitor(child) {
+  let failure = null;
+  let diagnostics = '';
+  const stderr = child && child.stderr;
+  const append = chunk => {
+    diagnostics = (diagnostics + String(chunk)).slice(-8192);
+  };
+  if (stderr && typeof stderr.on === 'function') {
+    stderr.on('data', append);
+    if (typeof stderr.unref === 'function') {
+      stderr.unref();
+    }
+  }
+  if (child && typeof child.once === 'function') {
+    child.once('error', error => {
+      failure = error;
+    });
+    child.once('close', (status, signal) => {
+      if (!failure) {
+        const ending = status === null
+          ? ' after signal ' + signal
+          : ' with status ' + status;
+        failure = new Error('Android Emulator exited' + ending + '.');
+      }
+    });
+  }
+  return {
+    detail() {
+      return diagnostics
+        .replace(/\x1b\[[0-9;]*m/g, '')
+        .trim();
+    },
+    failure() {
+      return failure;
+    },
+    release() {
+      if (stderr && typeof stderr.removeListener === 'function') {
+        stderr.removeListener('data', append);
+      }
+      if (stderr && typeof stderr.resume === 'function') {
+        // Keep draining the detached emulator without retaining its output.
+        stderr.resume();
+      }
+    },
+  };
+}
+
+function androidEmulatorFailure(environment, startup) {
+  const failure = startup && startup.failure();
+  if (!failure) {
+    return null;
+  }
+  const detail = startup.detail();
+  return new Error(
+    `Android virtual device ${environment.avd} failed to start: `
+    + failure.message
+    + (detail ? `\n${detail}` : '')
+  );
+}
+
 function wait(milliseconds) {
   return new Promise(resolve => setTimeout(resolve, milliseconds));
 }
@@ -237,9 +353,14 @@ async function waitForAndroidEmulator(environment, options = {}) {
   const now = options.now || Date.now;
   const timeoutMs = options.timeoutMs || EMULATOR_BOOT_TIMEOUT_MS;
   const pollMs = options.pollMs || EMULATOR_BOOT_POLL_MS;
+  const startup = options.startup;
   const startedAt = now();
 
   while (now() - startedAt < timeoutMs) {
+    const startupFailure = androidEmulatorFailure(environment, startup);
+    if (startupFailure) {
+      throw startupFailure;
+    }
     const serial = runningAndroidAvdSerial(environment, captureFn);
     if (serial) {
       const boot = captureFn(
@@ -254,9 +375,15 @@ async function waitForAndroidEmulator(environment, options = {}) {
     await delay(pollMs);
   }
 
+  const startupFailure = androidEmulatorFailure(environment, startup);
+  if (startupFailure) {
+    throw startupFailure;
+  }
+  const detail = startup && startup.detail();
   throw new Error(
     `Android virtual device ${environment.avd} did not finish booting `
     + `within ${Math.round(timeoutMs / 1000)} seconds.`
+    + (detail ? `\nAndroid Emulator diagnostics:\n${detail}` : '')
   );
 }
 
@@ -274,20 +401,26 @@ async function ensureAndroidEmulator(environment, options = {}) {
   const child = spawnFn(environment.emulator, args, {
     detached: true,
     env: environment.env,
-    stdio: 'ignore',
+    stdio: ['ignore', 'ignore', 'pipe'],
   });
   if (typeof child.unref === 'function') {
     child.unref();
   }
+  const startup = androidEmulatorStartupMonitor(child);
   log(`Cold-starting Android virtual device ${environment.avd}`);
 
-  return waitForAndroidEmulator(environment, {
-    captureFn,
-    delay: options.delay,
-    now: options.now,
-    pollMs: options.pollMs,
-    timeoutMs: options.timeoutMs,
-  });
+  try {
+    return await waitForAndroidEmulator(environment, {
+      captureFn,
+      delay: options.delay,
+      now: options.now,
+      pollMs: options.pollMs,
+      startup,
+      timeoutMs: options.timeoutMs,
+    });
+  } finally {
+    startup.release();
+  }
 }
 
 function androidSdkCandidates(env) {
@@ -597,8 +730,50 @@ async function prepareAndroidEnvironment(options = {}) {
   const platformToolsPackage = packages.get('platform-tools');
   const packagesToInstall = new Set();
   let emulatorInstallApproved = false;
+  let forceEmulatorReinstall = false;
+  const inspectEmulatorArchitecture = (
+    options.emulatorArchitectureMismatch
+    || androidEmulatorArchitectureMismatch
+  );
+  const emulatorMismatch = emulator
+    ? inspectEmulatorArchitecture(emulator, environment.env, {
+      architecture: options.architecture,
+      captureFn,
+      pathExists: options.pathExists,
+      platform: options.platform,
+    })
+    : null;
 
-  if (!emulator || !emulatorPackage || !emulatorPackage.installedVersion) {
+  if (emulatorMismatch) {
+    const installedVersion = emulatorPackage
+      && emulatorPackage.installedVersion;
+    const targetVersion = emulatorPackage
+      && (
+        emulatorPackage.availableVersion
+        || emulatorPackage.installedVersion
+      );
+    emulatorInstallApproved = await ask(
+      'Android Emulator'
+      + (installedVersion ? ' ' + installedVersion : '')
+      + ' was installed for ' + emulatorMismatch.installed.join(', ')
+      + ', but this Mac requires ' + emulatorMismatch.expected + '. '
+      + 'Reinstall'
+      + (targetVersion ? ' version ' + targetVersion : ' it')
+      + ' for this Mac now? (y/N): '
+    );
+    if (!emulatorInstallApproved) {
+      throw new Error(
+        'Android launch cancelled; the installed Android Emulator cannot '
+        + 'run this Mac\'s native system images.'
+      );
+    }
+    packagesToInstall.add('emulator');
+    forceEmulatorReinstall = true;
+  } else if (
+    !emulator
+    || !emulatorPackage
+    || !emulatorPackage.installedVersion
+  ) {
     const latest = emulatorPackage
       && (
         emulatorPackage.availableVersion
@@ -658,7 +833,12 @@ async function prepareAndroidEnvironment(options = {}) {
       environment.sdk,
       environment.env,
       [...packagesToInstall],
-      runFn
+      runFn,
+      {
+        architecture: options.architecture,
+        force: forceEmulatorReinstall,
+        platform: options.platform,
+      }
     );
     prependPath(
       environment.env,
@@ -672,6 +852,25 @@ async function prepareAndroidEnvironment(options = {}) {
       captureFn
     );
     ({ adb, emulator } = androidExecutables(environment));
+    if (forceEmulatorReinstall && emulator) {
+      const remainingMismatch = inspectEmulatorArchitecture(
+        emulator,
+        environment.env,
+        {
+          architecture: options.architecture,
+          captureFn,
+          pathExists: options.pathExists,
+          platform: options.platform,
+        }
+      );
+      if (remainingMismatch) {
+        throw new Error(
+          'Android Emulator reinstall completed, but its executable is still '
+          + 'for ' + remainingMismatch.installed.join(', ') + ' instead of '
+          + remainingMismatch.expected + '.'
+        );
+      }
+    }
   }
 
   if (!adb || !emulator) {
@@ -943,14 +1142,17 @@ async function runAndroid(options) {
 module.exports = {
   androidAvdApi,
   androidAvdMetadata,
+  androidEmulatorArchitectureMismatch,
   androidEmulatorLaunchArgs,
   androidEmulatorAvdName,
+  androidHostExecutableArchitecture,
   compareVersions,
   connectedAndroidEmulators,
   doctorAndroid,
   enableHostClipboardSharing,
   ensureAndroidEmulator,
   launchPreparedAndroid,
+  parseMachOArchitectures,
   parseEmulatorVersion,
   prepareAndroidDevelopment,
   prepareAndroidEnvironment,

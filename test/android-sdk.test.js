@@ -5,8 +5,10 @@ const path = require('node:path');
 const test = require('node:test');
 
 const {
+  androidCliPlatform,
   androidDownloadUrls,
   androidPackageNeedsUpdate,
+  installAndroidSdkPackages,
   parseAndroidCommandLineToolsPackage,
   parseAndroidSdkPackages,
   preferredAndroidSystemImage,
@@ -38,6 +40,44 @@ test('finds Google command-line tools for the current host repository', () => {
     selected.url,
     'https://dl.google.com/android/repository/mac.zip'
   );
+});
+
+test('maps Node hosts to explicit Android CLI platforms', () => {
+  assert.equal(androidCliPlatform('darwin', 'arm64'), 'mac_arm64');
+  assert.equal(androidCliPlatform('darwin', 'x64'), 'mac_x86_64');
+  assert.equal(androidCliPlatform('linux', 'x64'), 'linux_x86_64');
+  assert.equal(androidCliPlatform('win32', 'ia32'), 'windows_x86');
+  assert.equal(androidCliPlatform('freebsd', 'x64'), null);
+});
+
+test('installs SDK packages with an explicit native Android CLI platform', async () => {
+  const calls = [];
+  await installAndroidSdkPackages(
+    '/sdk/cmdline-tools/latest/bin/sdkmanager',
+    '/sdk',
+    { PATH: '/bin' },
+    ['emulator', 'system-images;android-37;google_apis;arm64-v8a'],
+    async (...args) => calls.push(args),
+    {
+      androidCli: '/sdk/cmdline-tools/latest/bin/android',
+      architecture: 'arm64',
+      force: true,
+      platform: 'darwin',
+    }
+  );
+
+  assert.deepEqual(calls[0].slice(0, 2), [
+    '/sdk/cmdline-tools/latest/bin/android',
+    [
+      '--sdk=/sdk',
+      'sdk',
+      'install',
+      '--platform=mac_arm64',
+      '--force',
+      'emulator',
+      'system-images/android-37/google_apis/arm64-v8a',
+    ],
+  ]);
 });
 
 test('parses installed, available, and updatable Android SDK packages', () => {
@@ -337,6 +377,139 @@ test('offers and installs an available Android Emulator upgrade', async t => {
     prompts.some(question => question.includes('Platform-Tools')),
     false
   );
+});
+
+test('offers to repair an Android Emulator installed for the wrong Mac architecture', async t => {
+  const temporary = fs.mkdtempSync(
+    path.join(os.tmpdir(), 'onramp-android-architecture-test-')
+  );
+  t.after(() => fs.rmSync(temporary, { recursive: true, force: true }));
+  const sdk = path.join(temporary, 'sdk');
+  const javaHome = path.join(temporary, 'jdk');
+  const avdHome = path.join(temporary, 'avd-home');
+  const commandExtension = process.platform === 'win32' ? '.bat' : '';
+  const executableExtension = process.platform === 'win32' ? '.exe' : '';
+  const sdkManager = path.join(
+    sdk,
+    'cmdline-tools',
+    'latest',
+    'bin',
+    'sdkmanager' + commandExtension
+  );
+  const emulator = path.join(
+    sdk,
+    'emulator',
+    'emulator' + executableExtension
+  );
+  const adb = path.join(
+    sdk,
+    'platform-tools',
+    'adb' + executableExtension
+  );
+  const java = path.join(
+    javaHome,
+    'bin',
+    'java' + executableExtension
+  );
+  const avd = 'OnRamp_API_37_1';
+  const avdDirectory = path.join(avdHome, avd + '.avd');
+  const imagePackage = (
+    'system-images;android-37.1;google_apis_ps16k;arm64-v8a'
+  );
+  const imageRelative = imagePackage.replaceAll(';', path.sep) + path.sep;
+
+  for (const filePath of [
+    sdkManager,
+    path.join(path.dirname(sdkManager), 'avdmanager' + commandExtension),
+    emulator,
+    adb,
+    java,
+  ]) {
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, '');
+  }
+  fs.mkdirSync(path.join(sdk, imageRelative), { recursive: true });
+  fs.mkdirSync(avdDirectory, { recursive: true });
+  fs.writeFileSync(
+    path.join(avdHome, avd + '.ini'),
+    'path=' + avdDirectory + '\n'
+  );
+  fs.writeFileSync(
+    path.join(avdDirectory, 'config.ini'),
+    'image.sysdir.1=' + imageRelative + '\n'
+  );
+
+  const packageMap = new Map([
+    [
+      'emulator',
+      {
+        path: 'emulator',
+        installedVersion: '37.1.11',
+        availableVersion: '37.1.11',
+      },
+    ],
+    [
+      'platform-tools',
+      { path: 'platform-tools', installedVersion: '37.0.1' },
+    ],
+    [
+      imagePackage,
+      { path: imagePackage, installedVersion: '8.0.0' },
+    ],
+  ]);
+  const prompts = [];
+  const installs = [];
+  let inspections = 0;
+
+  const environment = await prepareAndroidEnvironment({
+    architecture: 'arm64',
+    sdk,
+    javaHome,
+    platform: 'darwin',
+    env: { ANDROID_AVD_HOME: avdHome, PATH: '' },
+    captureFn: (command, args) => {
+      if (command === sdkManager && args[0] === '--version') {
+        return { status: 0, stdout: '23.0\n', stderr: '' };
+      }
+      if (command === emulator && args[0] === '-version') {
+        return {
+          status: 0,
+          stdout: 'Android emulator version 37.1.11.0\n',
+          stderr: '',
+        };
+      }
+      if (command === emulator && args[0] === '-list-avds') {
+        return { status: 0, stdout: avd + '\n', stderr: '' };
+      }
+      return { status: 0, stdout: '', stderr: '' };
+    },
+    emulatorArchitectureMismatch: () => {
+      inspections += 1;
+      return inspections === 1
+        ? { expected: 'arm64', installed: ['x86_64'] }
+        : null;
+    },
+    installPackages: async (...args) => installs.push(args),
+    listPackages: () => packageMap,
+    log: () => {},
+    promptYesNo: async question => {
+      prompts.push(question);
+      return true;
+    },
+  });
+
+  assert.match(
+    prompts[0],
+    /installed for x86_64.*requires arm64.*Reinstall version 37\.1\.11/
+  );
+  assert.deepEqual(installs[0][3], ['emulator']);
+  assert.deepEqual(installs[0][5], {
+    architecture: 'arm64',
+    force: true,
+    platform: 'darwin',
+  });
+  assert.equal(inspections, 2);
+  assert.equal(environment.avd, avd);
 });
 
 test('offers to install a missing Android emulator, image, and AVD', async t => {

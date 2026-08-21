@@ -49,6 +49,76 @@ function androidRepositoryHost(platform = process.platform) {
   return 'linux';
 }
 
+function androidCliPlatform(
+  platform = process.platform,
+  architecture = os.arch()
+) {
+  const platforms = {
+    darwin: 'mac',
+    linux: 'linux',
+    win32: 'windows',
+  };
+  const architectures = {
+    arm64: 'arm64',
+    ia32: 'x86',
+    x64: 'x86_64',
+  };
+  const hostPlatform = platforms[platform];
+  const hostArchitecture = architectures[architecture];
+  return hostPlatform && hostArchitecture
+    ? hostPlatform + '_' + hostArchitecture
+    : null;
+}
+
+function siblingAndroidCli(sdkManager, platform = process.platform) {
+  const executable = platform === 'win32' ? 'android.exe' : 'android';
+  const candidate = path.join(path.dirname(sdkManager), executable);
+  return fs.existsSync(candidate) ? candidate : null;
+}
+
+function androidSdkInstallInvocation(
+  sdkManager,
+  sdk,
+  packages,
+  options = {}
+) {
+  const platform = options.nativePlatform || androidCliPlatform(
+    options.platform,
+    options.architecture
+  );
+  const androidCli = options.androidCli === undefined
+    ? siblingAndroidCli(sdkManager, options.platform)
+    : options.androidCli;
+  if (androidCli && platform) {
+    return {
+      args: [
+        '--sdk=' + sdk,
+        'sdk',
+        'install',
+        '--platform=' + platform,
+        ...(options.force ? ['--force'] : []),
+        ...packages.map(packagePath => packagePath.replaceAll(';', '/')),
+      ],
+      command: androidCli,
+    };
+  }
+  if (options.force) {
+    throw new Error(
+      'The installed Android command-line tools cannot force a native '
+      + 'Android Emulator reinstall. Approve installing current command-line '
+      + 'tools, then retry.'
+    );
+  }
+  return {
+    args: [
+      '--sdk_root=' + sdk,
+      '--channel=0',
+      ...packages,
+    ],
+    command: sdkManager,
+  };
+}
+
 function xmlValue(contents, tag) {
   const match = contents.match(new RegExp(
     '<' + tag + '>([^<]+)</' + tag + '>'
@@ -804,15 +874,18 @@ async function installAndroidSdkPackages(
   sdk,
   env,
   packages,
-  runFn = runAndroidSdkInstall
+  runFn = runAndroidSdkInstall,
+  options = {}
 ) {
-  return runFn(
+  const invocation = androidSdkInstallInvocation(
     sdkManager,
-    [
-      '--sdk_root=' + sdk,
-      '--channel=0',
-      ...packages,
-    ],
+    sdk,
+    packages,
+    options
+  );
+  return runFn(
+    invocation.command,
+    invocation.args,
     undefined,
     env,
     { sdk }
@@ -888,9 +961,11 @@ function preferredAndroidSystemImage(
 
 module.exports = {
   ANDROID_REPOSITORY_URL,
+  androidCliPlatform,
   androidCommandCandidates,
   androidPackageNeedsUpdate,
   androidRepositoryHost,
+  androidSdkInstallInvocation,
   androidSystemImageArchitecture,
   androidSystemImageDetails,
   androidDownloadUrls,

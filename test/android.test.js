@@ -1,12 +1,16 @@
 const assert = require('node:assert/strict');
+const { EventEmitter } = require('node:events');
+const { PassThrough } = require('node:stream');
 const test = require('node:test');
 
 const {
+  androidEmulatorArchitectureMismatch,
   androidEmulatorLaunchArgs,
   compareVersions,
   connectedAndroidEmulators,
   enableHostClipboardSharing,
   ensureAndroidEmulator,
+  parseMachOArchitectures,
   parseEmulatorVersion,
   requireClipboardCapableEmulator,
   selectAndroidAvd,
@@ -34,6 +38,28 @@ test('rejects emulator versions with unreliable host clipboard transport', () =>
       })
     ),
     /33\.1\.23 or newer.*found 32\.1\.11\.0/
+  );
+});
+
+test('detects a non-native Android Emulator executable on macOS', () => {
+  assert.deepEqual(
+    parseMachOArchitectures(
+      'Mach-O universal binary with 2 architectures: [x86_64] [arm64]'
+    ),
+    ['x86_64', 'arm64']
+  );
+  assert.deepEqual(
+    androidEmulatorArchitectureMismatch('/sdk/emulator/emulator', {}, {
+      architecture: 'arm64',
+      captureFn: () => ({
+        status: 0,
+        stdout: 'Non-fat file is architecture: x86_64\n',
+        stderr: '',
+      }),
+      pathExists: () => true,
+      platform: 'darwin',
+    }),
+    { expected: 'arm64', installed: ['x86_64'] }
   );
 });
 
@@ -148,7 +174,50 @@ test('cold-launches an AVD and waits for Android to finish booting', async () =>
   ]);
   assert.equal(spawns[0][0], environment.emulator);
   assert.deepEqual(spawns[0][1], androidEmulatorLaunchArgs(environment.avd));
+  assert.deepEqual(spawns[0][2].stdio, ['ignore', 'ignore', 'pipe']);
   assert.ok(captures.some(([, args]) => args.includes('sys.boot_completed')));
+});
+
+test('reports an Android Emulator fatal error without waiting for boot timeout', async () => {
+  const environment = {
+    adb: '/sdk/platform-tools/adb',
+    avd: 'OnRamp_API_37_1',
+    emulator: '/sdk/emulator/emulator',
+    env: { ANDROID_HOME: '/sdk' },
+  };
+  const child = new EventEmitter();
+  child.stderr = new PassThrough();
+  child.unref = () => {};
+
+  const launch = ensureAndroidEmulator(environment, {
+    captureFn: () => ({
+      status: 0,
+      stderr: '',
+      stdout: 'List of devices attached\n',
+    }),
+    delay: () => new Promise(resolve => setImmediate(resolve)),
+    log: () => {},
+    now: (() => {
+      let time = 0;
+      return () => { time += 10; return time; };
+    })(),
+    spawnFn: () => {
+      setImmediate(() => {
+        child.stderr.write(
+          '\x1b[0;39mFATAL | System image must match the host architecture.\n'
+        );
+        child.stderr.end();
+        child.emit('close', 1, null);
+      });
+      return child;
+    },
+    timeoutMs: 1000,
+  });
+
+  await assert.rejects(
+    launch,
+    /failed to start: Android Emulator exited with status 1[\s\S]*FATAL \| System image must match/
+  );
 });
 
 test('launches the selected AVD when a different emulator is running', async () => {
