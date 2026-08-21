@@ -12,6 +12,7 @@ const {
   parseAndroidCommandLineToolsPackage,
   parseAndroidSdkPackages,
   preferredAndroidSystemImage,
+  removeAndroidSdkPackages,
   runAndroidSdkInstall,
 } = require('../src/android-sdk');
 const { prepareAndroidEnvironment } = require('../src/android');
@@ -77,6 +78,26 @@ test('installs SDK packages with an explicit native Android CLI platform', async
       'emulator',
       'system-images/android-37/google_apis/arm64-v8a',
     ],
+  ]);
+});
+
+test('removes SDK packages through the current Android CLI', async () => {
+  const calls = [];
+  await removeAndroidSdkPackages(
+    '/sdk/cmdline-tools/latest/bin/sdkmanager',
+    '/sdk',
+    { PATH: '/bin' },
+    ['emulator'],
+    async (...args) => calls.push(args),
+    {
+      androidCli: '/sdk/cmdline-tools/latest/bin/android',
+      platform: 'darwin',
+    }
+  );
+
+  assert.deepEqual(calls[0].slice(0, 2), [
+    '/sdk/cmdline-tools/latest/bin/android',
+    ['--sdk=/sdk', 'sdk', 'remove', 'emulator'],
   ]);
 });
 
@@ -198,6 +219,41 @@ test('reports download progress and extraction for Android CLI installs', async 
   assert.match(rendered, /\[[=-]+\]\s+\d+%/);
   assert.match(rendered, /100% Downloaded; extracting Android SDK package/);
   assert.match(rendered, /Android SDK package installation complete/);
+});
+
+test('rejects Android CLI URL and checksum mismatches despite a zero exit', async () => {
+  const output = [];
+  const stream = {
+    isTTY: false,
+    write: chunk => {
+      output.push(String(chunk));
+      return true;
+    },
+  };
+  const installer = [
+    "console.error('URL mismatch for emulator: old.zip != native.zip');",
+    "console.error('SHA mismatch for emulator: oldsha != nativesha');",
+  ].join('\n');
+
+  await assert.rejects(
+    runAndroidSdkInstall(
+      process.execPath,
+      ['-e', installer],
+      undefined,
+      process.env,
+      {
+        intervalMs: 5,
+        sdk: '/sdk',
+        stderr: stream,
+        stdout: stream,
+      }
+    ),
+    /installation was rejected:[\s\S]*URL mismatch[\s\S]*SHA mismatch/
+  );
+  assert.doesNotMatch(
+    output.join(''),
+    /Android SDK package installation complete/
+  );
 });
 
 test('selects the newest stable Google APIs image for the host architecture', () => {
@@ -459,6 +515,8 @@ test('offers to repair an Android Emulator installed for the wrong Mac architect
   ]);
   const prompts = [];
   const installs = [];
+  const removals = [];
+  const operations = [];
   let inspections = 0;
 
   const environment = await prepareAndroidEnvironment({
@@ -489,12 +547,19 @@ test('offers to repair an Android Emulator installed for the wrong Mac architect
         ? { expected: 'arm64', installed: ['x86_64'] }
         : null;
     },
-    installPackages: async (...args) => installs.push(args),
+    installPackages: async (...args) => {
+      operations.push('install');
+      installs.push(args);
+    },
     listPackages: () => packageMap,
     log: () => {},
     promptYesNo: async question => {
       prompts.push(question);
       return true;
+    },
+    removePackages: async (...args) => {
+      operations.push('remove');
+      removals.push(args);
     },
   });
 
@@ -502,10 +567,12 @@ test('offers to repair an Android Emulator installed for the wrong Mac architect
     prompts[0],
     /installed for x86_64.*requires arm64.*Reinstall version 37\.1\.11/
   );
+  assert.deepEqual(operations, ['remove', 'install']);
+  assert.deepEqual(removals[0][3], ['emulator']);
+  assert.deepEqual(removals[0][5], { platform: 'darwin' });
   assert.deepEqual(installs[0][3], ['emulator']);
   assert.deepEqual(installs[0][5], {
     architecture: 'arm64',
-    force: true,
     platform: 'darwin',
   });
   assert.equal(inspections, 2);

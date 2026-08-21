@@ -138,14 +138,18 @@ phase while leaving package verification and installation to the official
 Android CLI. OnRamp passes the native host platform explicitly to that CLI so
 a translated tool cannot silently install an Emulator for the wrong CPU
 architecture. On macOS it checks the installed Emulator executable before
-launch and, when necessary, offers to reinstall it for the native architecture.
-OnRamp then enables host clipboard sharing and cold-starts the selected
-emulator. The cold start bypasses stale Quick Boot state without wiping the
-virtual device's apps or data. If the Emulator exits during startup, OnRamp
-reports its diagnostic output immediately; a genuine boot timeout includes the
-diagnostics collected while it was running. Android Emulator 33.1.23 or newer
-is required for reliable host clipboard transport. Broken AVD entries and
-preview or codename images are not selected.
+launch and, when necessary, offers to replace it for the native architecture.
+After approval, OnRamp removes only the incompatible Emulator SDK package,
+installs the native package, and verifies its executable; AVDs and system
+images remain untouched. URL or checksum mismatch output from the Android CLI
+is treated as failure even when that process exits with status zero. OnRamp
+then enables host clipboard sharing and cold-starts the selected emulator. The
+cold start bypasses stale Quick Boot state without wiping the virtual device's
+apps or data. If the Emulator exits during startup, OnRamp reports its
+diagnostic output immediately; a genuine boot timeout includes the diagnostics
+collected while it was running. Android Emulator 33.1.23 or newer is required
+for reliable host clipboard transport. Broken AVD entries and preview or
+codename images are not selected.
 
 If an iOS dependency installation needs to be rebuilt:
 

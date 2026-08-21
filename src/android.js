@@ -13,6 +13,7 @@ const {
   installAndroidSdkPackages,
   listAndroidSdkPackages,
   preferredAndroidSystemImage,
+  removeAndroidSdkPackages,
 } = require('./android-sdk');
 const { addNativePlatforms } = require('./native');
 const { startMetro, warmMetroBundle } = require('./metro');
@@ -730,7 +731,7 @@ async function prepareAndroidEnvironment(options = {}) {
   const platformToolsPackage = packages.get('platform-tools');
   const packagesToInstall = new Set();
   let emulatorInstallApproved = false;
-  let forceEmulatorReinstall = false;
+  let replaceEmulatorPackage = false;
   const inspectEmulatorArchitecture = (
     options.emulatorArchitectureMismatch
     || androidEmulatorArchitectureMismatch
@@ -768,7 +769,7 @@ async function prepareAndroidEnvironment(options = {}) {
       );
     }
     packagesToInstall.add('emulator');
-    forceEmulatorReinstall = true;
+    replaceEmulatorPackage = true;
   } else if (
     !emulator
     || !emulatorPackage
@@ -824,6 +825,18 @@ async function prepareAndroidEnvironment(options = {}) {
   }
 
   if (packagesToInstall.size > 0) {
+    if (replaceEmulatorPackage) {
+      log('Removing incompatible Android Emulator package...');
+      await (options.removePackages || removeAndroidSdkPackages)(
+        sdkManager,
+        environment.sdk,
+        environment.env,
+        ['emulator'],
+        runFn,
+        { platform: options.platform }
+      );
+      log('✓ Incompatible Android Emulator package removed');
+    }
     log(
       'Installing Android SDK package'
       + (packagesToInstall.size === 1 ? '' : 's') + '...'
@@ -836,7 +849,6 @@ async function prepareAndroidEnvironment(options = {}) {
       runFn,
       {
         architecture: options.architecture,
-        force: forceEmulatorReinstall,
         platform: options.platform,
       }
     );
@@ -852,7 +864,7 @@ async function prepareAndroidEnvironment(options = {}) {
       captureFn
     );
     ({ adb, emulator } = androidExecutables(environment));
-    if (forceEmulatorReinstall && emulator) {
+    if (replaceEmulatorPackage && emulator) {
       const remainingMismatch = inspectEmulatorArchitecture(
         emulator,
         environment.env,

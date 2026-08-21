@@ -119,6 +119,36 @@ function androidSdkInstallInvocation(
   };
 }
 
+function androidSdkRemoveInvocation(
+  sdkManager,
+  sdk,
+  packages,
+  options = {}
+) {
+  const androidCli = options.androidCli === undefined
+    ? siblingAndroidCli(sdkManager, options.platform)
+    : options.androidCli;
+  if (androidCli) {
+    return {
+      args: [
+        '--sdk=' + sdk,
+        'sdk',
+        'remove',
+        ...packages.map(packagePath => packagePath.replaceAll(';', '/')),
+      ],
+      command: androidCli,
+    };
+  }
+  return {
+    args: [
+      '--sdk_root=' + sdk,
+      '--uninstall',
+      ...packages,
+    ],
+    command: sdkManager,
+  };
+}
+
 function xmlValue(contents, tag) {
   const match = contents.match(new RegExp(
     '<' + tag + '>([^<]+)</' + tag + '>'
@@ -810,6 +840,7 @@ function runAndroidSdkInstall(
   const spawnFn = options.spawnFn || spawn;
   const stdout = options.stdout || process.stdout;
   const stderr = options.stderr || process.stderr;
+  let diagnosticOutput = '';
   const progress = new AndroidSdkInstallProgress(options.sdk, {
     downloadSizeFn: options.downloadSizeFn,
     fetchFn: options.fetchFn,
@@ -828,6 +859,7 @@ function runAndroidSdkInstall(
   );
 
   function forward(chunk, destination) {
+    diagnosticOutput = (diagnosticOutput + String(chunk)).slice(-32768);
     progress.observe(chunk);
     progress.clearLine();
     destination.write(chunk);
@@ -860,6 +892,18 @@ function runAndroidSdkInstall(
     child.once('error', error => finish(error));
     child.once('close', status => {
       if (status === 0) {
+        const rejected = [...new Set(
+          [...diagnosticOutput.matchAll(
+            /(?:^|\n)((?:URL|SHA) mismatch for [^\r\n]+)/g
+          )].map(match => match[1].trim())
+        )];
+        if (rejected.length > 0) {
+          finish(new Error(
+            'Android SDK package installation was rejected:\n'
+            + rejected.join('\n')
+          ));
+          return;
+        }
         finish(null, status);
         return;
       }
@@ -878,6 +922,29 @@ async function installAndroidSdkPackages(
   options = {}
 ) {
   const invocation = androidSdkInstallInvocation(
+    sdkManager,
+    sdk,
+    packages,
+    options
+  );
+  return runFn(
+    invocation.command,
+    invocation.args,
+    undefined,
+    env,
+    { sdk }
+  );
+}
+
+async function removeAndroidSdkPackages(
+  sdkManager,
+  sdk,
+  env,
+  packages,
+  runFn = runAndroidSdkInstall,
+  options = {}
+) {
+  const invocation = androidSdkRemoveInvocation(
     sdkManager,
     sdk,
     packages,
@@ -966,6 +1033,7 @@ module.exports = {
   androidPackageNeedsUpdate,
   androidRepositoryHost,
   androidSdkInstallInvocation,
+  androidSdkRemoveInvocation,
   androidSystemImageArchitecture,
   androidSystemImageDetails,
   androidDownloadUrls,
@@ -980,5 +1048,6 @@ module.exports = {
   parseAndroidSdkPackages,
   parseNumericVersion,
   preferredAndroidSystemImage,
+  removeAndroidSdkPackages,
   runAndroidSdkInstall,
 };
