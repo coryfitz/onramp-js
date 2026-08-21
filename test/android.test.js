@@ -44,6 +44,8 @@ test('enables the Android Emulator clipboard preference on macOS', () => {
     {
       platform: 'darwin',
       captureFn: (...args) => calls.push(args),
+      findExecutableFn: () => '/usr/bin/defaults',
+      pathExists: () => true,
     }
   );
 

@@ -526,7 +526,7 @@ test('opens the selected simulator window and explicitly activates it', () => {
 
   showIosSimulator(
     {id: 'SIMULATOR-ID', name: 'iPhone 16'},
-    {env: process.env, xcrun: 'xcrun'},
+    {env: {}, xcodeSelect: 'xcode-select', xcrun: 'xcrun'},
     captureCommand,
     candidate => candidate.endsWith('/Simulator.app')
   );

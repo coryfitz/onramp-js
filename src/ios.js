@@ -652,7 +652,8 @@ function showIosSimulator(
   captureCommand = capture,
   pathExists = fs.existsSync
 ) {
-  const xcodeSelect = findExecutable('xcode-select', environment.env);
+  const xcodeSelect = environment.xcodeSelect
+    || findExecutable('xcode-select', environment.env);
   if (!xcodeSelect) {
     throw new Error('xcode-select was not found on PATH.');
   }

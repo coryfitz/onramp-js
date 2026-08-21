@@ -50,12 +50,14 @@ function requireClipboardCapableEmulator(emulator, env, captureFn = capture) {
 function enableHostClipboardSharing(env, options = {}) {
   const platform = options.platform || process.platform;
   const captureFn = options.captureFn || capture;
+  const findExecutableFn = options.findExecutableFn || findExecutable;
+  const pathExists = options.pathExists || fs.existsSync;
   if (platform !== 'darwin') {
     return false;
   }
 
-  const defaults = findExecutable('defaults', env) || '/usr/bin/defaults';
-  if (!fs.existsSync(defaults)) {
+  const defaults = findExecutableFn('defaults', env) || '/usr/bin/defaults';
+  if (!pathExists(defaults)) {
     throw new Error('macOS defaults command not found; cannot enable emulator clipboard sharing.');
   }
   captureFn(
