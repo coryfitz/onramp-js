@@ -111,9 +111,12 @@ The native run commands add a missing platform automatically. The iOS command
 checks Xcode and CocoaPods, installs Pods, and asks Apple for the preferred
 runtime build on every launch. When that runtime is missing or newer than the
 installed build, OnRamp offers to download and install it through Xcode before
-selecting a simulator on the newest runtime. If Xcode itself is missing,
-OnRamp can open its Mac App Store page after asking; Apple still requires the
-user to complete the Xcode installation.
+selecting a simulator on the newest runtime. Runtime downloads request Apple's
+exact build and explicitly select the host architecture; if that build is not
+downloadable, OnRamp retries Xcode's latest compatible runtime. A failed
+optional upgrade does not prevent launch when a usable runtime is already
+installed. If Xcode itself is missing, OnRamp can open its Mac App Store page
+after asking; Apple still requires the user to complete the Xcode installation.
 
 The Android command checks Google's stable SDK package list on every launch.
 It offers to install or upgrade the Emulator package and to install the newest

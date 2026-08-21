@@ -16,6 +16,7 @@ const {
   ensurePreferredIosSimulatorRuntime,
   iosJsLocation,
   iosPodsAreCurrent,
+  iosRuntimeArchitectureVariant,
   parseAvailableIosSimulatorRuntimes,
   parseAvailableIosSimulatorRuntimeVersions,
   parseBuildSetting,
@@ -290,6 +291,11 @@ test('reads Apple preferred iOS runtime build matching metadata', () => {
   });
 });
 
+test('selects the Xcode runtime architecture for the current host mode', () => {
+  assert.equal(iosRuntimeArchitectureVariant('arm64'), 'arm64');
+  assert.equal(iosRuntimeArchitectureVariant('x64'), 'universal');
+});
+
 test('offers and downloads Apple preferred iOS runtime build', async () => {
   const prompts = [];
   const commands = [];
@@ -320,6 +326,7 @@ test('offers and downloads Apple preferred iOS runtime build', async () => {
         prompts.push(question);
         return true;
       },
+      architectureVariant: 'arm64',
       runCommand: (...args) => commands.push(args),
       log: () => {},
     }
@@ -329,9 +336,100 @@ test('offers and downloads Apple preferred iOS runtime build', async () => {
   assert.match(prompts[0], /newer iOS 26\.5.*23F81a.*23F77/);
   assert.deepEqual(commands[0].slice(0, 3), [
     'xcodebuild',
-    ['-downloadPlatform', 'iOS', '-buildVersion', '26.5'],
+    [
+      '-downloadPlatform',
+      'iOS',
+      '-buildVersion',
+      '23F81a',
+      '-architectureVariant',
+      'arm64',
+    ],
     '/tmp/example/ios',
   ]);
+});
+
+test('retries the latest architecture-specific runtime when a build is unavailable', async () => {
+  const commands = [];
+  let inspections = 0;
+  const result = await ensurePreferredIosSimulatorRuntime(
+    { env: {}, xcodebuild: 'xcodebuild', xcrun: 'xcrun' },
+    {
+      architectureVariant: 'arm64',
+      inspectRuntimes: () => {
+        inspections += 1;
+        return inspections === 1
+          ? [{ build: '23F77', identifier: 'old', version: '26.5' }]
+          : [{ build: '23F81a', identifier: 'new', version: '26.5' }];
+      },
+      preferredRuntime: () => ({ build: '23F81a', version: '26.5' }),
+      promptYesNo: async () => true,
+      runCommand: (...args) => {
+        commands.push(args);
+        if (commands.length === 1) {
+          throw new Error('requested build unavailable');
+        }
+      },
+      log: () => {},
+    }
+  );
+
+  assert.equal(result.changed, true);
+  assert.deepEqual(commands.map(command => command[1]), [
+    [
+      '-downloadPlatform',
+      'iOS',
+      '-buildVersion',
+      '23F81a',
+      '-architectureVariant',
+      'arm64',
+    ],
+    ['-downloadPlatform', 'iOS', '-architectureVariant', 'arm64'],
+  ]);
+});
+
+test('continues with an installed runtime when an optional upgrade fails', async () => {
+  const logs = [];
+  const installed = [{
+    build: '23F77',
+    identifier: 'installed',
+    version: '26.5',
+  }];
+  const result = await ensurePreferredIosSimulatorRuntime(
+    { env: {}, xcodebuild: 'xcodebuild', xcrun: 'xcrun' },
+    {
+      architectureVariant: 'arm64',
+      inspectRuntimes: () => installed,
+      preferredRuntime: () => ({ build: '23F81a', version: '26.5' }),
+      promptYesNo: async () => true,
+      runCommand: () => {
+        throw new Error('download failed');
+      },
+      log: message => logs.push(message),
+    }
+  );
+
+  assert.equal(result.changed, false);
+  assert.equal(result.installed, installed);
+  assert.match(logs.join('\n'), /Continuing with installed iOS 26\.5 build 23F77/);
+});
+
+test('fails when neither Xcode download can provide a required runtime', async () => {
+  await assert.rejects(
+    ensurePreferredIosSimulatorRuntime(
+      { env: {}, xcodebuild: 'xcodebuild', xcrun: 'xcrun' },
+      {
+        architectureVariant: 'arm64',
+        inspectRuntimes: () => [],
+        preferredRuntime: () => ({ build: '23F81a', version: '26.5' }),
+        promptYesNo: async () => true,
+        runCommand: () => {
+          throw new Error('download failed');
+        },
+        log: () => {},
+      }
+    ),
+    /Could not install an iOS Simulator runtime.*download failed/
+  );
 });
 
 test('cancels iOS launch when runtime installation is declined', async () => {
@@ -442,6 +540,45 @@ test('does not offer a runtime download when iOS runtimes are installed', async 
     /runtimes are installed \(18\.6, 26\.5\)/
   );
   assert.equal(prompted, false);
+});
+
+test('downloads a missing compatible runtime for the explicit host architecture', async () => {
+  const commands = [];
+  let queries = 0;
+  const selected = await ensureEligibleIosSimulator(
+    '/tmp/example/ios',
+    'Example',
+    { env: {}, xcodebuild: 'xcodebuild', xcrun: 'xcrun' },
+    {
+      architectureVariant: 'arm64',
+      inspectRuntimes: () => [],
+      promptYesNo: async () => true,
+      queryWithRetry: async () => {
+        queries += 1;
+        return queries === 1
+          ? {
+            destinations: [],
+            output: 'error: iOS 26.5 is not installed',
+            status: 1,
+          }
+          : {
+            destinations: [{ id: 'NEW', name: 'iPhone 17', os: '26.5' }],
+            output: '',
+            status: 0,
+          };
+      },
+      runCommand: (...args) => commands.push(args),
+      selectSimulator: destinations => destinations[0],
+    }
+  );
+
+  assert.equal(selected.id, 'NEW');
+  assert.deepEqual(commands[0], [
+    'xcodebuild',
+    ['-downloadPlatform', 'iOS', '-architectureVariant', 'arm64'],
+    '/tmp/example/ios',
+    {},
+  ]);
 });
 
 test('does not try to boot a simulator that is already booted', () => {
