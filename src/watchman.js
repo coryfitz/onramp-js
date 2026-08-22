@@ -52,7 +52,7 @@ function doctorWatchman(options = {}) {
   const platform = options.platform || process.platform;
   if (platform === 'darwin') {
     console.log(
-      'Metro will use the native macOS file watcher to keep Fast Refresh stable.'
+      'Metro will use the native macOS file watcher; OnRamp filters empty Fast Refresh updates.'
     );
     return health;
   }
@@ -73,7 +73,7 @@ function metroWatchmanConfig(options = {}) {
   const platform = options.platform || process.platform;
   if (platform === 'darwin') {
     console.log(
-      'Metro is using the native macOS file watcher to avoid metadata-only Fast Refresh cycles.'
+      'Metro is using the native macOS file watcher; OnRamp filters empty Fast Refresh updates.'
     );
   } else if (health.status === 'broken') {
     console.warn(`Warning: ${watchmanRepairMessage(health)}`);

@@ -129,9 +129,12 @@ the app, avoiding cold-start bundle timeouts on newly generated projects.
 The iOS simulator connects to Metro through the numeric IPv4 loopback address,
 avoiding repeated Fast Refresh disconnects caused by `localhost` resolution in
 iOS 26 simulator runtimes.
-On macOS, Metro also uses its native file watcher. This filters metadata-only
-dependency events that Watchman can otherwise report as empty refreshes while
-continuing to refresh normally when application source changes.
+On macOS, Metro uses its native file watcher. Cloud sync, indexing, and similar
+services can still emit metadata-only dependency events even though no module
+contents changed. OnRamp lets Metro calculate each delta, suppresses only HMR
+cycles with no added, modified, or deleted modules, and continues to deliver
+real source edits normally. This avoids a repeated `Refreshing...` banner
+without disabling Fast Refresh or changing route discovery.
 
 The run command stays attached to the Metro process after the app launches.
 Press Ctrl+C to stop that project-owned server cleanly.

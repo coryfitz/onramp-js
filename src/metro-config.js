@@ -1,4 +1,5 @@
 const path = require('path');
+const { suppressEmptyMetroHmrUpdates } = require('./metro-hmr');
 const { generateRoutesConfig, watchRoutesConfig } = require('./routes');
 const { metroWatchmanConfig } = require('./watchman');
 
@@ -12,6 +13,7 @@ function createMetroConfig(projectRoot = process.cwd()) {
   process.env.ONRAMP_PLATFORM = process.env.ONRAMP_PLATFORM || 'native';
   generateRoutesConfig(root);
   if (shouldWatchRoutes()) {
+    suppressEmptyMetroHmrUpdates();
     const routeWatcher = watchRoutesConfig(root);
     process.once('exit', () => routeWatcher.close());
   }
