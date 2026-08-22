@@ -99,6 +99,17 @@ npx onramp-js run ios --watch-diagnostics
 Each relevant file event is printed with its exact project-relative path so a
 refresh loop can be traced to an editor, generator, or other process.
 
+After one successful native build, later runs reuse the installed app when
+`app.json`, package metadata, dependency locks, and that platform's native
+project are unchanged. JavaScript and TypeScript changes still come from the
+new project-owned Metro server, so this skips only redundant compilation and
+installation. Force the full native path after an external tool changes the
+installed app or while diagnosing build behavior:
+
+```sh
+npx onramp-js run mobile --rebuild
+```
+
 `run mobile` checks every interactive Android and iOS prerequisite before it
 starts either app, so installation questions cannot be hidden by Metro output.
 It then launches Android before iOS so the faster emulator is available first.
@@ -118,6 +129,9 @@ continuing to refresh normally when application source changes.
 
 The run command stays attached to the Metro process after the app launches.
 Press Ctrl+C to stop that project-owned server cleanly.
+During a full native build, OnRamp prints elapsed activity messages when Xcode
+or Gradle is otherwise quiet, including Xcode's post-build settings and install
+work.
 
 The native run commands add a missing platform automatically. The iOS command
 checks Xcode and CocoaPods, installs Pods, and asks Apple for the preferred
@@ -154,9 +168,11 @@ generic low-resolution AVDs that blur when scaled, offers to create a sharper
 replacement from the installed system image, preserves the old device and its
 app data, and prefers the sharper matching device. App installation explicitly
 targets that selected emulator even when another device is online. OnRamp then
-enables host clipboard sharing and cold-starts the selected emulator. The cold start
-bypasses stale Quick Boot state without wiping the virtual device's apps or
-data. If the Emulator exits during startup, OnRamp reports its diagnostic
+enables host clipboard sharing and cold-starts the selected emulator. The cold
+start bypasses stale Quick Boot state without wiping the virtual device's apps
+or data, while disabling the boot animation to shorten that full boot. Android
+native builds target only the active emulator architecture.
+If the Emulator exits during startup, OnRamp reports its diagnostic
 output immediately; a genuine boot timeout includes the diagnostics collected
 while it was running. Android Emulator 33.1.23 or newer is required for
 reliable host clipboard transport. Broken AVD entries and preview or codename

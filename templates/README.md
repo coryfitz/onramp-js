@@ -32,10 +32,13 @@ React Native app with React Strict DOM and file-based navigation.
 
 Native runs choose a free Metro port beginning at 8081. To require a specific
 free port, pass `--metro-port 8082` to `onramp-js run ios` or Android.
-For `run mobile`, the requested port belongs to iOS and Android starts at the
+For `run mobile`, the requested port belongs to Android and iOS starts at the
 next available port above it.
 Each native launcher prepares its first complete bundle before opening the app
 so a new project's initial Metro build cannot time out in the simulator.
+After a successful native build, unchanged native inputs reuse that installed
+app while current JavaScript and TypeScript continue to come from Metro. Pass
+`--rebuild` to a native run to force compilation and installation.
 The command remains attached to its Metro process; press Ctrl+C to stop it.
 
 The root app includes safe-area context. Keep screen content inside the

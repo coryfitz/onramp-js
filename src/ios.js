@@ -2,8 +2,14 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { addNativePlatforms } = require('./native');
+const {
+  cachedNativeBuild,
+  clearNativeBuildState,
+  nativeBuildFingerprint,
+  recordNativeBuild,
+} = require('./native-build-cache');
 const { startMetro, warmMetroBundle } = require('./metro');
-const { capture, findExecutable, run } = require('./process');
+const { capture, findExecutable, run, runAsync } = require('./process');
 const { promptYesNo } = require('./prompt');
 
 const IOS_DESTINATION_QUERY_ATTEMPTS = 3;
@@ -313,6 +319,52 @@ function availableIosSimulatorRuntimes(environment) {
 function availableIosSimulatorRuntimeVersions(environment) {
   const runtimes = availableIosSimulatorRuntimes(environment);
   return runtimes ? runtimes.map(runtime => runtime.version) : null;
+}
+
+function parseAvailableIosSimulatorDevices(output) {
+  const data = JSON.parse(output);
+  const devices = [];
+  for (const [runtime, candidates] of Object.entries(data.devices || {})) {
+    const match = runtime.match(/\.SimRuntime\.iOS-(\d+(?:-\d+)*)$/);
+    if (!match || !Array.isArray(candidates)) {
+      continue;
+    }
+    const os = match[1].replaceAll('-', '.');
+    for (const candidate of candidates) {
+      if (
+        candidate.isAvailable !== false
+        && candidate.udid
+        && candidate.name
+      ) {
+        devices.push({
+          id: candidate.udid,
+          name: candidate.name,
+          os,
+          state: candidate.state || null,
+        });
+      }
+    }
+  }
+  return devices;
+}
+
+function availableIosSimulatorDevices(
+  environment,
+  captureCommand = capture
+) {
+  const result = captureCommand(
+    environment.xcrun,
+    ['simctl', 'list', '--json', 'devices', 'available'],
+    { env: environment.env, check: false }
+  );
+  if (result.status !== 0) {
+    return [];
+  }
+  try {
+    return parseAvailableIosSimulatorDevices(result.stdout);
+  } catch (_error) {
+    return [];
+  }
 }
 
 function parsePreferredIosSimulatorRuntime(output) {
@@ -1079,6 +1131,58 @@ function iosBundleIdentifier(
   return identifier;
 }
 
+function iosProjectBundleIdentifier(iosDir) {
+  for (const entry of fs.readdirSync(iosDir).sort()) {
+    if (!entry.endsWith('.xcodeproj')) {
+      continue;
+    }
+    const projectPath = path.join(iosDir, entry, 'project.pbxproj');
+    if (!fs.existsSync(projectPath)) {
+      continue;
+    }
+    const match = fs.readFileSync(projectPath, 'utf8').match(
+      /\bPRODUCT_BUNDLE_IDENTIFIER\s*=\s*"?([^;"\s]+)"?\s*;/
+    );
+    if (match && !match[1].includes('$(')) {
+      return match[1];
+    }
+  }
+  return null;
+}
+
+function resolvedIosBundleIdentifier(
+  outputDir,
+  iosDir,
+  nativeConfig,
+  nativeName,
+  simulatorId,
+  environment
+) {
+  return nativeConfig?.ios.bundleIdentifier
+    || iosProjectBundleIdentifier(iosDir)
+    || iosBundleIdentifier(iosDir, nativeName, simulatorId, environment);
+}
+
+function iosAppIsInstalled(
+  simulatorId,
+  bundleIdentifier,
+  environment,
+  captureCommand = capture
+) {
+  const result = captureCommand(
+    environment.xcrun,
+    [
+      'simctl',
+      'get_app_container',
+      simulatorId,
+      bundleIdentifier,
+      'app',
+    ],
+    { env: environment.env, check: false }
+  );
+  return result.status === 0 && result.stdout.trim().endsWith('.app');
+}
+
 function iosJsLocation(metroPort) {
   // iOS 26 simulator runtimes can repeatedly drop React Native's Fast Refresh
   // connection when localhost resolves over both IPv4 and IPv6. OnRamp's iOS
@@ -1135,7 +1239,11 @@ async function prepareIosDevelopment({
     }
   }
 
-  await addNativePlatforms({ platform: 'ios', name, output: outputDir });
+  const native = await addNativePlatforms({
+    platform: 'ios',
+    name,
+    output: outputDir,
+  });
   const iosDir = path.join(outputDir, 'ios');
   ensureXcodeComponents(environment, iosDir);
   console.log('Checking for the latest compatible iOS Simulator runtime...');
@@ -1143,13 +1251,30 @@ async function prepareIosDevelopment({
   ensureIosPods(iosDir, environment, { outputDir });
   console.log('Checking for an eligible iOS simulator...');
   const nativeName = nativeAppName(outputDir);
-  const simulator = await ensureEligibleIosSimulator(
+  const directCandidates = availableIosSimulatorDevices(environment);
+  let simulator;
+  if (directCandidates.length > 0) {
+    simulator = selectIosSimulator(
+      directCandidates,
+      environment,
+      new Set(
+        directCandidates
+          .filter(candidate => candidate.state === 'Booted')
+          .map(candidate => candidate.id)
+      )
+    );
+    console.log(`Using ${simulator.name} (iOS ${simulator.os}, ${simulator.id})`);
+  } else {
+    simulator = await ensureEligibleIosSimulator(
+      iosDir,
+      nativeName,
+      environment
+    );
+  }
+  const bundleIdentifier = resolvedIosBundleIdentifier(
+    outputDir,
     iosDir,
-    nativeName,
-    environment
-  );
-  const bundleIdentifier = iosBundleIdentifier(
-    iosDir,
+    native.nativeConfig,
     nativeName,
     simulator.id,
     environment
@@ -1169,6 +1294,7 @@ async function launchPreparedIos(
     metroStartingPort,
     metroInteractive = true,
     metroLabel,
+    rebuild = false,
   } = {}
 ) {
   const {
@@ -1191,27 +1317,60 @@ async function launchPreparedIos(
   console.log(`Using Metro port ${metro.port}`);
   try {
     await warmMetroBundle({ port: metro.port, platform: 'ios' });
-    run(
-      'npx',
-      [
-        'react-native',
-        'run-ios',
-        '--udid',
+    const fingerprint = nativeBuildFingerprint(outputDir, 'ios');
+    const cached = cachedNativeBuild(outputDir, 'ios');
+    const reuseInstalled = (
+      !rebuild
+      && cached
+      && cached.fingerprint === fingerprint
+      && cached.bundleIdentifier === bundleIdentifier
+      && cached.simulatorId === simulator.id
+      && iosAppIsInstalled(
         simulator.id,
-        '--port',
-        String(metro.port),
-        '--no-packager',
-      ],
-      outputDir,
-      environment.env,
-      { inheritInput: metroInteractive }
+        bundleIdentifier,
+        environment
+      )
     );
+    if (reuseInstalled) {
+      console.log(
+        '✓ iOS native inputs are unchanged; opening the installed app without rebuilding'
+      );
+    } else {
+      console.log('Building and installing the iOS app...');
+      console.log(
+        'Xcode may be quiet while finalizing build settings; OnRamp will keep reporting activity.'
+      );
+      await runAsync(
+        'npx',
+        [
+          'react-native',
+          'run-ios',
+          '--udid',
+          simulator.id,
+          '--port',
+          String(metro.port),
+          '--no-packager',
+        ],
+        outputDir,
+        environment.env,
+        {
+          activityLabel: 'Xcode is still building, finalizing, and installing',
+          inheritInput: metroInteractive,
+        }
+      );
+    }
     launchIosWithMetro(
       simulator.id,
       bundleIdentifier,
       metro.port,
       environment
     );
+    if (!reuseInstalled) {
+      recordNativeBuild(outputDir, 'ios', {
+        bundleIdentifier,
+        simulatorId: simulator.id,
+      });
+    }
     activateIosSimulator(environment);
     console.log('iOS app launched. Metro remains active; press Ctrl+C to stop.');
     return metro;
@@ -1223,12 +1382,16 @@ async function launchPreparedIos(
 
 async function runIos(options) {
   const prepared = await prepareIosDevelopment(options);
-  return launchPreparedIos(prepared, { metroPort: options.metroPort });
+  return launchPreparedIos(prepared, {
+    metroPort: options.metroPort,
+    rebuild: options.rebuild,
+  });
 }
 
 async function repairIos({ name, output, fresh = false }) {
   const outputDir = path.resolve(output || process.cwd());
   console.log('Repairing iOS development files...');
+  clearNativeBuildState(outputDir, 'ios');
   const environment = doctorIos();
   await addNativePlatforms({ platform: 'ios', name, output: outputDir });
   const iosDir = path.join(outputDir, 'ios');
@@ -1259,6 +1422,7 @@ async function repairIos({ name, output, fresh = false }) {
 
 module.exports = {
   activateIosSimulator,
+  availableIosSimulatorDevices,
   availableIosSimulatorRuntimes,
   availableIosSimulatorRuntimeVersions,
   doctorIos,
@@ -1266,12 +1430,15 @@ module.exports = {
   ensureIosSimulatorBooted,
   ensurePreferredIosSimulatorRuntime,
   iosBundleIdentifier,
+  iosAppIsInstalled,
   iosJsLocation,
+  iosProjectBundleIdentifier,
   iosPodsAreCurrent,
   iosRuntimeArchitectureVariant,
   launchIosWithMetro,
   parseAvailableIosSimulatorRuntimeVersions,
   parseAvailableIosSimulatorRuntimes,
+  parseAvailableIosSimulatorDevices,
   parseBuildSetting,
   parseIosSimulatorState,
   parsePreferredIosSimulatorRuntime,

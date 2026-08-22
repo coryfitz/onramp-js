@@ -11,6 +11,7 @@ const {
   connectedAndroidEmulators,
   enableHostClipboardSharing,
   ensureAndroidEmulator,
+  launchInstalledAndroidApp,
   parseMachOArchitectures,
   parseEmulatorVersion,
   requireClipboardCapableEmulator,
@@ -172,6 +173,7 @@ test('cold-launches an AVD and waits for Android to finish booting', async () =>
   assert.deepEqual(androidEmulatorLaunchArgs('Pixel_API_35'), [
     '@Pixel_API_35',
     '-no-snapshot-load',
+    '-no-boot-anim',
   ]);
   assert.equal(spawns[0][0], environment.emulator);
   assert.deepEqual(spawns[0][1], androidEmulatorLaunchArgs(environment.avd));
@@ -188,6 +190,31 @@ test('runs React Native on the selected Android emulator only', () => {
     '--port',
     '8081',
     '--no-packager',
+    '--active-arch-only',
+  ]);
+});
+
+test('opens a cached Android app and reconnects it to Metro', () => {
+  const calls = [];
+  launchInstalledAndroidApp(
+    { adb: '/sdk/adb', env: { ANDROID_HOME: '/sdk' } },
+    'emulator-5554',
+    'com.example.app',
+    8081,
+    (command, args) => {
+      calls.push([command, args]);
+      return args.includes('resolve-activity')
+        ? { status: 0, stdout: 'com.example.app/.MainActivity\n', stderr: '' }
+        : { status: 0, stdout: '', stderr: '' };
+    }
+  );
+
+  assert.deepEqual(calls[0][1], [
+    '-s', 'emulator-5554', 'reverse', 'tcp:8081', 'tcp:8081',
+  ]);
+  assert.ok(calls.some(([, args]) => args.includes('force-stop')));
+  assert.deepEqual(calls.at(-1)[1].slice(-2), [
+    '-n', 'com.example.app/.MainActivity',
   ]);
 });
 
@@ -285,5 +312,9 @@ test('launches the selected AVD when a different emulator is running', async () 
 
   assert.equal(serial, 'emulator-5556');
   assert.equal(spawns.length, 1);
-  assert.deepEqual(spawns[0][1], ['@Pixel_API_36', '-no-snapshot-load']);
+  assert.deepEqual(spawns[0][1], [
+    '@Pixel_API_36',
+    '-no-snapshot-load',
+    '-no-boot-anim',
+  ]);
 });

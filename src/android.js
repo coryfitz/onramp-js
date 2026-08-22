@@ -16,8 +16,18 @@ const {
   removeAndroidSdkPackages,
 } = require('./android-sdk');
 const { addNativePlatforms } = require('./native');
+const {
+  cachedNativeBuild,
+  nativeBuildFingerprint,
+  recordNativeBuild,
+} = require('./native-build-cache');
 const { startMetro, warmMetroBundle } = require('./metro');
-const { capture, findExecutable, prependPath, run } = require('./process');
+const {
+  capture,
+  findExecutable,
+  prependPath,
+  runAsync,
+} = require('./process');
 const { promptYesNo } = require('./prompt');
 
 const MIN_CLIPBOARD_EMULATOR_VERSION = [33, 1, 23];
@@ -345,7 +355,7 @@ function runningAndroidAvdSerial(environment, captureFn = capture) {
 }
 
 function androidEmulatorLaunchArgs(avd) {
-  return [`@${avd}`, '-no-snapshot-load'];
+  return [`@${avd}`, '-no-snapshot-load', '-no-boot-anim'];
 }
 
 function androidRunArguments(port, device) {
@@ -357,7 +367,101 @@ function androidRunArguments(port, device) {
     '--port',
     String(port),
     '--no-packager',
+    '--active-arch-only',
   ];
+}
+
+function androidApplicationId(outputDir, nativeConfig) {
+  if (nativeConfig && nativeConfig.android.package) {
+    return nativeConfig.android.package;
+  }
+  const buildGradle = fs.readFileSync(
+    path.join(outputDir, 'android', 'app', 'build.gradle'),
+    'utf8'
+  );
+  const match = buildGradle.match(/\bapplicationId\s+["']([^"']+)["']/);
+  if (!match) {
+    throw new Error('Could not determine the Android application ID.');
+  }
+  return match[1];
+}
+
+function androidAppIsInstalled(
+  environment,
+  device,
+  applicationId,
+  captureFn = capture
+) {
+  const result = captureFn(
+    environment.adb,
+    ['-s', device, 'shell', 'pm', 'path', applicationId],
+    { env: environment.env, check: false }
+  );
+  return result.status === 0 && /\bpackage:/.test(result.stdout);
+}
+
+function launchInstalledAndroidApp(
+  environment,
+  device,
+  applicationId,
+  metroPort,
+  captureFn = capture
+) {
+  captureFn(
+    environment.adb,
+    [
+      '-s',
+      device,
+      'reverse',
+      `tcp:${metroPort}`,
+      `tcp:${metroPort}`,
+    ],
+    { env: environment.env }
+  );
+  const resolved = captureFn(
+    environment.adb,
+    [
+      '-s',
+      device,
+      'shell',
+      'cmd',
+      'package',
+      'resolve-activity',
+      '--brief',
+      '-a',
+      'android.intent.action.MAIN',
+      '-c',
+      'android.intent.category.LAUNCHER',
+      applicationId,
+    ],
+    { env: environment.env, check: false }
+  );
+  const component = resolved.stdout
+    .split(/\r?\n/)
+    .map(line => line.trim())
+    .find(line => line.includes('/')) || `${applicationId}/.MainActivity`;
+  captureFn(
+    environment.adb,
+    ['-s', device, 'shell', 'am', 'force-stop', applicationId],
+    { env: environment.env }
+  );
+  captureFn(
+    environment.adb,
+    [
+      '-s',
+      device,
+      'shell',
+      'am',
+      'start',
+      '-a',
+      'android.intent.action.MAIN',
+      '-c',
+      'android.intent.category.LAUNCHER',
+      '-n',
+      component,
+    ],
+    { env: environment.env }
+  );
 }
 
 function androidEmulatorStartupMonitor(child) {
@@ -1212,8 +1316,13 @@ async function prepareAndroidDevelopment({
   if (enableHostClipboardSharing(environment.env)) {
     console.log('✓ Android emulator host clipboard sharing is enabled');
   }
-  await addNativePlatforms({ platform: 'android', name, output: outputDir });
-  return { environment, outputDir };
+  const native = await addNativePlatforms({
+    platform: 'android',
+    name,
+    output: outputDir,
+  });
+  const applicationId = androidApplicationId(outputDir, native.nativeConfig);
+  return { applicationId, environment, outputDir };
 }
 
 async function launchPreparedAndroid(
@@ -1223,9 +1332,10 @@ async function launchPreparedAndroid(
     metroStartingPort,
     metroInteractive = true,
     metroLabel,
+    rebuild = false,
   } = {}
 ) {
-  const { environment, outputDir } = prepared;
+  const { applicationId, environment, outputDir } = prepared;
   const device = await ensureAndroidEmulator(environment);
   const metro = await startMetro({
     output: outputDir,
@@ -1239,13 +1349,51 @@ async function launchPreparedAndroid(
   console.log(`Using Metro port ${metro.port}`);
   try {
     await warmMetroBundle({ port: metro.port, platform: 'android' });
-    run(
-      'npx',
-      androidRunArguments(metro.port, device),
-      outputDir,
-      environment.env,
-      { inheritInput: metroInteractive }
+    const fingerprint = nativeBuildFingerprint(outputDir, 'android');
+    const cached = cachedNativeBuild(outputDir, 'android');
+    const reuseInstalled = (
+      !rebuild
+      && cached
+      && cached.fingerprint === fingerprint
+      && cached.applicationId === applicationId
+      && cached.avd === environment.avd
+      && cached.metroPort === metro.port
+      && androidAppIsInstalled(
+        environment,
+        device,
+        applicationId
+      )
     );
+    if (reuseInstalled) {
+      console.log(
+        '✓ Android native inputs are unchanged; opening the installed app without rebuilding'
+      );
+      launchInstalledAndroidApp(
+        environment,
+        device,
+        applicationId,
+        metro.port
+      );
+    } else {
+      console.log(
+        'Building and installing the Android app for the active emulator architecture...'
+      );
+      await runAsync(
+        'npx',
+        androidRunArguments(metro.port, device),
+        outputDir,
+        environment.env,
+        {
+          activityLabel: 'Android is still building and installing',
+          inheritInput: metroInteractive,
+        }
+      );
+      recordNativeBuild(outputDir, 'android', {
+        applicationId,
+        avd: environment.avd,
+        metroPort: metro.port,
+      });
+    }
     wakeAndroidEmulators(environment.adb, environment.env);
     console.log('Android app launched. Metro remains active; press Ctrl+C to stop.');
     return metro;
@@ -1260,6 +1408,7 @@ async function runAndroid(options) {
   return launchPreparedAndroid(prepared, {
     metroPort: options.metroPort,
     metroStartingPort: options.metroStartingPort,
+    rebuild: options.rebuild,
   });
 }
 
@@ -1267,6 +1416,8 @@ module.exports = {
   androidAvdApi,
   androidAvdDisplay,
   androidAvdMetadata,
+  androidAppIsInstalled,
+  androidApplicationId,
   androidEmulatorArchitectureMismatch,
   androidEmulatorLaunchArgs,
   androidEmulatorAvdName,
@@ -1278,6 +1429,7 @@ module.exports = {
   enableHostClipboardSharing,
   ensureAndroidEmulator,
   launchPreparedAndroid,
+  launchInstalledAndroidApp,
   parseMachOArchitectures,
   parseEmulatorVersion,
   parseAndroidDeviceProfiles,

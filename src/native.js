@@ -76,7 +76,7 @@ async function addNativePlatforms({ platform, name, output }) {
     for (const directory of synchronized) {
       console.log(`✓ ${directory} identity and launcher assets synchronized`);
     }
-    return { nativeName, added: [] };
+    return { nativeConfig, nativeName, added: [] };
   }
 
   const temporaryRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'onramp-js-'));
@@ -126,7 +126,7 @@ async function addNativePlatforms({ platform, name, output }) {
     console.log(`✓ ${directory} identity and launcher assets synchronized`);
   }
 
-  return { nativeName, added: missing };
+  return { nativeConfig, nativeName, added: missing };
 }
 
 module.exports = {

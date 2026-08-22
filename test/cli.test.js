@@ -15,10 +15,12 @@ const {
   ensureIosSimulatorBooted,
   ensurePreferredIosSimulatorRuntime,
   iosJsLocation,
+  iosProjectBundleIdentifier,
   iosPodsAreCurrent,
   iosRuntimeArchitectureVariant,
   parseAvailableIosSimulatorRuntimes,
   parseAvailableIosSimulatorRuntimeVersions,
+  parseAvailableIosSimulatorDevices,
   parseBuildSetting,
   parsePreferredIosSimulatorRuntime,
   prepareIosEnvironment,
@@ -49,6 +51,13 @@ test('parses native source watcher diagnostics', () => {
 
   assert.equal(options.platform, 'ios');
   assert.equal(options.watchDiagnostics, true);
+});
+
+test('parses an explicit native rebuild request', () => {
+  const options = parseRunArgs(['mobile', '--rebuild']);
+
+  assert.equal(options.platform, 'mobile');
+  assert.equal(options.rebuild, true);
 });
 
 test('parses mobile as a native run target', () => {
@@ -208,10 +217,12 @@ test('mobile completes both preflights before starting either Metro', async () =
   assert.equal(calls[2][2].metroPort, 9090);
   assert.equal(calls[2][2].metroInteractive, false);
   assert.equal(calls[2][2].metroLabel, 'Android');
+  assert.equal(calls[2][2].rebuild, undefined);
   assert.equal(calls[3][1], preparedIos);
   assert.equal(calls[3][2].metroStartingPort, 9091);
   assert.equal(calls[3][2].metroInteractive, false);
   assert.equal(calls[3][2].metroLabel, 'iOS');
+  assert.equal(calls[3][2].rebuild, undefined);
   assert.deepEqual(result, { android: androidMetro, ios: iosMetro });
 });
 
@@ -313,6 +324,56 @@ test('recognizes only available iOS simulator runtimes', () => {
       version: '18.6',
     }]
   );
+});
+
+test('reads available iPhone simulator devices without asking Xcode for build settings', () => {
+  const devices = parseAvailableIosSimulatorDevices(JSON.stringify({
+    devices: {
+      'com.apple.CoreSimulator.SimRuntime.iOS-26-5': [
+        {
+          name: 'iPhone 17',
+          udid: 'BOOTED-ID',
+          state: 'Booted',
+          isAvailable: true,
+        },
+        {
+          name: 'Unavailable Phone',
+          udid: 'MISSING-ID',
+          state: 'Shutdown',
+          isAvailable: false,
+        },
+      ],
+      'com.apple.CoreSimulator.SimRuntime.tvOS-26-5': [
+        { name: 'Apple TV', udid: 'TV-ID', state: 'Shutdown' },
+      ],
+    },
+  }));
+
+  assert.deepEqual(devices, [{
+    id: 'BOOTED-ID',
+    name: 'iPhone 17',
+    os: '26.5',
+    state: 'Booted',
+  }]);
+});
+
+test('reads an iOS bundle identifier directly from the Xcode project', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'onramp-ios-project-'));
+  const project = path.join(root, 'Example.xcodeproj');
+  fs.mkdirSync(project);
+  fs.writeFileSync(
+    path.join(project, 'project.pbxproj'),
+    'PRODUCT_BUNDLE_IDENTIFIER = "com.example.fastlaunch";\n'
+  );
+
+  try {
+    assert.equal(
+      iosProjectBundleIdentifier(root),
+      'com.example.fastlaunch'
+    );
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test('reads Apple preferred iOS runtime build matching metadata', () => {

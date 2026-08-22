@@ -1,6 +1,6 @@
 const fs = require('fs');
 const path = require('path');
-const { spawnSync } = require('child_process');
+const { spawn, spawnSync } = require('child_process');
 
 function isPythonWrapper(env = process.env) {
   return env.ONRAMP_PYTHON_WRAPPER === '1';
@@ -65,6 +65,80 @@ function capture(command, args, options = {}) {
   };
 }
 
+function runAsync(command, args, cwd, env = process.env, options = {}) {
+  if (!isPythonWrapper(env)) {
+    console.log(`Running: ${command} ${args.join(' ')}`);
+  }
+  const quiet = options.quiet === true;
+  const inheritInput = options.inheritInput !== false;
+  const log = options.log || console.log;
+  const activityLabel = options.activityLabel;
+  const startedAt = Date.now();
+
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, {
+      cwd,
+      env,
+      shell: false,
+      stdio: quiet
+        ? ['ignore', 'pipe', 'pipe']
+        : [inheritInput ? 'inherit' : 'ignore', 'inherit', 'inherit'],
+    });
+    const stdout = [];
+    const stderr = [];
+    if (quiet) {
+      child.stdout.on('data', chunk => stdout.push(chunk));
+      child.stderr.on('data', chunk => stderr.push(chunk));
+    }
+
+    let activityTimeout;
+    let activityInterval;
+    const reportActivity = () => {
+      const seconds = Math.max(1, Math.round((Date.now() - startedAt) / 1000));
+      log(`${activityLabel} (${seconds}s elapsed)...`);
+    };
+    if (activityLabel) {
+      const delay = options.activityDelayMs ?? 15000;
+      const interval = options.activityIntervalMs ?? 30000;
+      activityTimeout = setTimeout(() => {
+        reportActivity();
+        activityInterval = setInterval(reportActivity, interval);
+      }, delay);
+    }
+
+    const clearActivity = () => {
+      clearTimeout(activityTimeout);
+      clearInterval(activityInterval);
+    };
+    child.once('error', error => {
+      clearActivity();
+      reject(error);
+    });
+    child.once('close', (status, signal) => {
+      clearActivity();
+      const result = {
+        signal,
+        status,
+        stdout: Buffer.concat(stdout).toString('utf8'),
+        stderr: Buffer.concat(stderr).toString('utf8'),
+      };
+      if (status !== 0) {
+        const label = isPythonWrapper(env) ? 'Frontend command' : command;
+        const detail = quiet
+          ? (result.stderr || result.stdout).trim()
+          : '';
+        reject(new Error(
+          `${label} exited with status ${status}`
+          + `${signal ? ` after signal ${signal}` : ''}`
+          + `${detail ? `: ${detail}` : ''}`
+        ));
+        return;
+      }
+      resolve(result);
+    });
+  });
+}
+
 function executableNames(command) {
   if (process.platform !== 'win32' || path.extname(command)) {
     return [command];
@@ -107,4 +181,5 @@ module.exports = {
   isPythonWrapper,
   prependPath,
   run,
+  runAsync,
 };

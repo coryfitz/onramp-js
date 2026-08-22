@@ -106,6 +106,7 @@ async function runMobile(options, runners = {
       metroPort: options.metroPort,
       metroInteractive: false,
       metroLabel: 'Android',
+      rebuild: options.rebuild,
     });
     if (!androidMetro || !Number.isInteger(androidMetro.port)) {
       throw new Error('The Android Metro server did not report its port.');
@@ -119,6 +120,7 @@ async function runMobile(options, runners = {
         metroStartingPort: androidMetro.port + 1,
         metroInteractive: false,
         metroLabel: 'iOS',
+        rebuild: options.rebuild,
       }
     );
     return { android: androidMetro, ios: iosMetro };
@@ -130,7 +132,14 @@ async function runMobile(options, runners = {
   }
 }
 
-async function runFrontend({ platform, name, output, metroPort, watchDiagnostics }) {
+async function runFrontend({
+  platform,
+  name,
+  output,
+  metroPort,
+  rebuild,
+  watchDiagnostics,
+}) {
   const outputDir = path.resolve(output || process.cwd());
   requireFrontend(outputDir);
   doctorWeb();
@@ -142,19 +151,40 @@ async function runFrontend({ platform, name, output, metroPort, watchDiagnostics
     if (watchDiagnostics) {
       throw new Error('--watch-diagnostics is only valid for iOS, Android, or mobile runs.');
     }
+    if (rebuild) {
+      throw new Error('--rebuild is only valid for iOS, Android, or mobile runs.');
+    }
     runWeb(outputDir);
     return;
   }
   if (platform === 'ios') {
-    await runIos({ name, output: outputDir, metroPort, watchDiagnostics });
+    await runIos({
+      name,
+      output: outputDir,
+      metroPort,
+      rebuild,
+      watchDiagnostics,
+    });
     return;
   }
   if (platform === 'android') {
-    await runAndroid({ name, output: outputDir, metroPort, watchDiagnostics });
+    await runAndroid({
+      name,
+      output: outputDir,
+      metroPort,
+      rebuild,
+      watchDiagnostics,
+    });
     return;
   }
   if (platform === 'mobile') {
-    await runMobile({ name, output: outputDir, metroPort, watchDiagnostics });
+    await runMobile({
+      name,
+      output: outputDir,
+      metroPort,
+      rebuild,
+      watchDiagnostics,
+    });
     return;
   }
   throw new Error('Run platform must be web, ios, android, or mobile.');
