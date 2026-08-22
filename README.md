@@ -16,6 +16,12 @@ By default, `create` writes the shared application, installs its npm
 dependencies, and generates its initial file-based route registry without
 spending time creating native platform projects.
 
+Route discovery, platform-specific page selection, aliases, and dynamic path
+parameters are shared across every target. Web route modules remain
+dynamically imported for route-level code splitting. iOS and Android include
+the discovered route modules in Metro's initial graph so loading a route does
+not register another development bundle and trigger a Fast Refresh loop.
+
 Include mobile projects during creation when desired:
 
 ```sh

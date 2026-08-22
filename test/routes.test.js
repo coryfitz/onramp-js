@@ -52,6 +52,9 @@ test('writes platform route registries independently', t => {
   const iosPath = path.join(generatedDir, routesFileName('ios'));
   const iosContent = fs.readFileSync(iosPath, 'utf8');
   assert.match(iosContent, /settings\.ios/);
+  assert.match(iosContent, /import \* as routeModule\d+ from '\.\.\/\.\.\/app\/settings\.ios';/);
+  assert.match(iosContent, /Promise\.resolve\(routeModule\d+\)/);
+  assert.doesNotMatch(iosContent, /\(\) => import\(/);
   const iosMtime = fs.statSync(iosPath).mtimeMs;
 
   process.env.ONRAMP_PLATFORM = 'android';
@@ -59,7 +62,67 @@ test('writes platform route registries independently', t => {
   const androidPath = path.join(generatedDir, routesFileName('android'));
   const androidContent = fs.readFileSync(androidPath, 'utf8');
   assert.match(androidContent, /settings\.android/);
+  assert.match(
+    androidContent,
+    /import \* as routeModule\d+ from '\.\.\/\.\.\/app\/settings\.android';/
+  );
+  assert.match(androidContent, /Promise\.resolve\(routeModule\d+\)/);
+  assert.doesNotMatch(androidContent, /\(\) => import\(/);
   assert.equal(fs.readFileSync(iosPath, 'utf8'), iosContent);
   assert.equal(fs.statSync(iosPath).mtimeMs, iosMtime);
   assert.notEqual(androidPath, iosPath);
+});
+
+test('keeps file-based route semantics while splitting only web routes', t => {
+  const originalPlatform = process.env.ONRAMP_PLATFORM;
+  const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'onramp-routes-loading-test-'));
+  const appDir = path.join(projectRoot, 'app');
+  const generatedDir = path.join(projectRoot, 'src', 'generated');
+
+  fs.mkdirSync(path.join(appDir, 'blog'), { recursive: true });
+  fs.mkdirSync(path.join(appDir, 'profile'), { recursive: true });
+  fs.writeFileSync(path.join(appDir, 'index.tsx'), 'export default function Home() {}\n');
+  fs.writeFileSync(path.join(appDir, 'blog', 'index.tsx'), 'export default function Blog() {}\n');
+  fs.writeFileSync(
+    path.join(appDir, 'profile', '[id].tsx'),
+    'export default function Profile() {}\n'
+  );
+
+  t.after(() => {
+    if (originalPlatform === undefined) delete process.env.ONRAMP_PLATFORM;
+    else process.env.ONRAMP_PLATFORM = originalPlatform;
+    fs.rmSync(projectRoot, { recursive: true, force: true });
+  });
+
+  process.env.ONRAMP_PLATFORM = 'web';
+  assert.equal(generateRoutesConfig(projectRoot), true);
+  const webContent = fs.readFileSync(path.join(generatedDir, routesFileName('web')), 'utf8');
+  assert.match(webContent, /"path": "\/"/);
+  assert.match(webContent, /"path": "\/index"/);
+  assert.match(webContent, /"path": "\/blog"/);
+  assert.match(webContent, /"path": "\/blog\/index"/);
+  assert.match(webContent, /"path": "\/profile\/:id"/);
+  assert.match(webContent, /"isDynamic": true/);
+  assert.match(webContent, /\(\) => import\('\.\.\/\.\.\/app\/index'\)/);
+  assert.doesNotMatch(webContent, /import \* as routeModule/);
+  assert.doesNotMatch(webContent, /Promise\.resolve\(routeModule/);
+
+  process.env.ONRAMP_PLATFORM = 'native';
+  assert.equal(generateRoutesConfig(projectRoot), true);
+  const nativeContent = fs.readFileSync(path.join(generatedDir, routesFileName('native')), 'utf8');
+  assert.match(nativeContent, /"path": "\/"/);
+  assert.match(nativeContent, /"path": "\/index"/);
+  assert.match(nativeContent, /"path": "\/blog"/);
+  assert.match(nativeContent, /"path": "\/blog\/index"/);
+  assert.match(nativeContent, /"path": "\/profile\/:id"/);
+  assert.match(nativeContent, /"isDynamic": true/);
+  assert.match(nativeContent, /import \* as routeModule\d+ from '\.\.\/\.\.\/app\/index';/);
+  assert.match(nativeContent, /\(\) => Promise\.resolve\(routeModule\d+\)/);
+  assert.doesNotMatch(nativeContent, /\(\) => import\(/);
+
+  assert.equal((nativeContent.match(/from '\.\.\/\.\.\/app\/index';/g) || []).length, 1);
+  assert.equal(
+    (nativeContent.match(/"\.\.\/\.\.\/app\/index": \(\) => Promise\.resolve/g) || []).length,
+    1
+  );
 });
