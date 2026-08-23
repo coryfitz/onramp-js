@@ -6,6 +6,19 @@ const test = require('node:test');
 
 const { generateRoutesConfig, routesFileName } = require('../src/routes');
 
+test('the starter app demonstrates home and dynamic file routes', () => {
+  const templates = path.join(__dirname, '..', 'templates', 'app');
+  const home = fs.readFileSync(path.join(templates, 'index.tsx'), 'utf8');
+  const profile = fs.readFileSync(path.join(templates, 'profile', '[id].tsx'), 'utf8');
+  const starter = `${home}\n${profile}`;
+
+  assert.match(home, /navigate\('\/profile\/ada'\)/);
+  assert.match(profile, /function ProfilePage\(\{ id \}/);
+  assert.match(profile, /app\/profile\/\[id\]\.tsx/);
+  assert.equal(fs.existsSync(path.join(templates, 'about.tsx')), false);
+  assert.doesNotMatch(starter, /window\.location/);
+});
+
 test('does not rewrite unchanged generated routes', t => {
   const originalCwd = process.cwd();
   const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'onramp-routes-test-'));
