@@ -1,16 +1,17 @@
 import React, { useState } from 'react';
 import { html } from 'react-strict-dom';
+import { brandMark } from '../../src/brand-image';
 import { useNavigation } from '../../src/navigation/NavigationProvider';
 
 const palette = {
-  ink: '#14231E',
-  muted: '#65736D',
-  canvas: '#F3F6F2',
+  ink: '#071C47',
+  muted: '#66738A',
+  canvas: '#F4F7FC',
   surface: '#FFFFFF',
-  line: '#DDE6E0',
-  green: '#176B4D',
-  mint: '#DDF4E7',
-  amber: '#F5C85B',
+  line: '#DCE4F0',
+  green: '#174A96',
+  mint: '#E7EFFB',
+  amber: '#BFD4FF',
 };
 
 const exampleProfiles = [
@@ -71,22 +72,19 @@ export default function ProfilePage({ id }: { id?: string }) {
               cursor: 'pointer',
             } as any}
           >
-            <html.span
+            <html.img
+              src={brandMark}
+              alt="OnRamp"
+              width={46}
+              height={46}
               style={{
-                width: 42,
-                height: 42,
-                borderRadius: 13,
-                backgroundColor: palette.ink,
-                color: 'white',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                fontSize: 16,
-                fontWeight: '800',
+                width: 46,
+                height: 46,
+                borderRadius: 14,
+                border: `1px solid ${palette.line}`,
+                objectFit: 'contain',
               } as any}
-            >
-              OR
-            </html.span>
+            />
             <html.span style={{ fontSize: 16, fontWeight: '800' } as any}>
               OnRamp Starter
             </html.span>
@@ -130,7 +128,7 @@ export default function ProfilePage({ id }: { id?: string }) {
                 alignItems: 'center',
                 gap: 10,
                 marginBottom: 22,
-                color: '#A9CDBD',
+                color: '#AFC5E4',
                 fontSize: 12,
                 fontWeight: '800',
                 letterSpacing: 1.2,
@@ -169,7 +167,7 @@ export default function ProfilePage({ id }: { id?: string }) {
             </html.h1>
             <html.p
               style={{
-                color: '#C7D7D0',
+                color: '#C9D6EA',
                 fontSize: 17,
                 lineHeight: 1.6,
                 margin: 0,
@@ -199,7 +197,7 @@ export default function ProfilePage({ id }: { id?: string }) {
               <html.button
                 onClick={() => navigate('/')}
                 style={{
-                  border: '1px solid #4B5F57',
+                  border: '1px solid #35527C',
                   borderRadius: 12,
                   backgroundColor: 'transparent',
                   color: 'white',
@@ -298,9 +296,9 @@ export default function ProfilePage({ id }: { id?: string }) {
                     flex: 1,
                     minWidth: 190,
                     textAlign: 'left',
-                    border: `1px solid ${isCurrent ? '#B8DCC9' : palette.line}`,
+                    border: `1px solid ${isCurrent ? '#B7CBEA' : palette.line}`,
                     borderRadius: 18,
-                    backgroundColor: isCurrent ? '#F0FAF4' : palette.surface,
+                    backgroundColor: isCurrent ? '#F1F5FB' : palette.surface,
                     color: palette.ink,
                     padding: 20,
                     cursor: 'pointer',

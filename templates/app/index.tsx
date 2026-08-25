@@ -1,16 +1,17 @@
 import React, { useState } from 'react';
 import { html } from 'react-strict-dom';
+import { brandLockup, brandMark } from '../src/brand-image';
 import { useNavigation } from '../src/navigation/NavigationProvider';
 
 const palette = {
-  ink: '#14231E',
-  muted: '#65736D',
-  canvas: '#F3F6F2',
+  ink: '#071C47',
+  muted: '#66738A',
+  canvas: '#F4F7FC',
   surface: '#FFFFFF',
-  line: '#DDE6E0',
-  green: '#176B4D',
-  mint: '#DDF4E7',
-  amber: '#F5C85B',
+  line: '#DCE4F0',
+  green: '#174A96',
+  mint: '#E7EFFB',
+  amber: '#BFD4FF',
 };
 
 const steps = [
@@ -78,22 +79,19 @@ export default function HomePage() {
           } as any}
         >
           <html.div style={{ display: 'flex', alignItems: 'center', gap: 12 } as any}>
-            <html.div
+            <html.img
+              src={brandMark}
+              alt="OnRamp"
+              width={46}
+              height={46}
               style={{
-                width: 42,
-                height: 42,
-                borderRadius: 13,
-                backgroundColor: palette.ink,
-                color: 'white',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                fontSize: 16,
-                fontWeight: '800',
+                width: 46,
+                height: 46,
+                borderRadius: 14,
+                border: `1px solid ${palette.line}`,
+                objectFit: 'contain',
               } as any}
-            >
-              OR
-            </html.div>
+            />
             <html.div>
               <html.div style={{ fontSize: 16, fontWeight: '800' } as any}>
                 OnRamp Starter
@@ -151,7 +149,7 @@ export default function HomePage() {
             </html.h1>
             <html.p
               style={{
-                color: '#C7D7D0',
+                color: '#C9D6EA',
                 fontSize: 17,
                 lineHeight: 1.6,
                 margin: 0,
@@ -191,6 +189,19 @@ export default function HomePage() {
               padding: 28,
             } as any}
           >
+            <html.img
+              src={brandLockup}
+              alt="OnRamp"
+              width={170}
+              height={148}
+              style={{
+                width: 170,
+                height: 148,
+                maxWidth: '100%',
+                objectFit: 'contain',
+                marginBottom: 18,
+              } as any}
+            />
             <html.div style={{ color: palette.muted, fontSize: 13, marginBottom: 8 } as any}>
               Project snapshot
             </html.div>
@@ -265,9 +276,9 @@ export default function HomePage() {
                     flex: 1,
                     minWidth: 230,
                     textAlign: 'left',
-                    border: `1px solid ${isComplete ? '#B8DCC9' : palette.line}`,
+                    border: `1px solid ${isComplete ? '#B7CBEA' : palette.line}`,
                     borderRadius: 18,
-                    backgroundColor: isComplete ? '#F0FAF4' : palette.surface,
+                    backgroundColor: isComplete ? '#F1F5FB' : palette.surface,
                     color: palette.ink,
                     padding: 20,
                     cursor: 'pointer',
@@ -292,7 +303,7 @@ export default function HomePage() {
                         display: 'flex',
                         alignItems: 'center',
                         justifyContent: 'center',
-                        backgroundColor: isComplete ? palette.green : '#EEF2EF',
+                        backgroundColor: isComplete ? palette.green : '#E9EEF7',
                         color: isComplete ? 'white' : palette.muted,
                         fontSize: 12,
                         fontWeight: '900',

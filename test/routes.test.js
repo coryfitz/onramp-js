@@ -13,6 +13,9 @@ test('the starter app demonstrates home and dynamic file routes', () => {
   const starter = `${home}\n${profile}`;
 
   assert.match(home, /navigate\('\/profile\/ada'\)/);
+  assert.match(home, /brandLockup, brandMark/);
+  assert.match(home, /<html\.img/);
+  assert.match(profile, /brandMark/);
   assert.match(profile, /function ProfilePage\(\{ id \}/);
   assert.match(profile, /app\/profile\/\[id\]\.tsx/);
   assert.equal(fs.existsSync(path.join(templates, 'about.tsx')), false);
