@@ -33,6 +33,9 @@ test('the starter app demonstrates home and dynamic file routes', () => {
   assert.match(home, /<html\.img/);
   assert.match(home, /<html\.span>Ready to customize<\/html\.span>/);
   assert.match(home, /<html\.span>\s*\{completed\.length\} of \{steps\.length\} complete/);
+  assert.match(home, /<html\.div style=\{styles\.stepCheckMark\} \/>/);
+  assert.match(home, /<html\.div style=\{styles\.stepCheckOpen\} \/>/);
+  assert.doesNotMatch(home, /\{isComplete \? ['"]✓['"] : ['"]○['"]\}/);
   assert.match(home, /useCompactLayout\(\)/);
   assert.match(profile, /brandMark/);
   assert.match(profile, /function ProfilePage\(\{ id \}/);

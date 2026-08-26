@@ -189,16 +189,35 @@ const styles = css.create({
   stepCheck: {
     width: 25,
     height: 25,
+    flexShrink: 0,
     borderRadius: 999,
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: '#E9EEF7',
-    color: palette.muted,
-    fontSize: 12,
-    fontWeight: '900',
   },
-  stepCheckComplete: { backgroundColor: palette.green, color: 'white' },
+  stepCheckComplete: { backgroundColor: palette.green },
+  stepCheckMark: {
+    width: 6,
+    height: 11,
+    boxSizing: 'border-box',
+    borderRightWidth: 2,
+    borderRightStyle: 'solid',
+    borderRightColor: 'white',
+    borderBottomWidth: 2,
+    borderBottomStyle: 'solid',
+    borderBottomColor: 'white',
+    transform: 'translateY(-1px) rotate(45deg)',
+  },
+  stepCheckOpen: {
+    width: 9,
+    height: 9,
+    boxSizing: 'border-box',
+    borderWidth: 2,
+    borderStyle: 'solid',
+    borderColor: palette.muted,
+    borderRadius: 999,
+  },
   stepTitle: { fontSize: 17, fontWeight: '800', marginBottom: 8 },
   stepDetail: { color: palette.muted, fontSize: 14, lineHeight: '1.5' },
 });
@@ -337,11 +356,15 @@ export default function HomePage() {
                   >
                     <html.div style={styles.stepTop}>
                       <html.span style={styles.stepNumber}>{step.number}</html.span>
-                      <html.span
+                      <html.div
                         style={[styles.stepCheck, isComplete && styles.stepCheckComplete]}
                       >
-                        {isComplete ? '✓' : '○'}
-                      </html.span>
+                        {isComplete ? (
+                          <html.div style={styles.stepCheckMark} />
+                        ) : (
+                          <html.div style={styles.stepCheckOpen} />
+                        )}
+                      </html.div>
                     </html.div>
                     <html.div style={styles.stepTitle}>
                       <html.span>{step.title}</html.span>
