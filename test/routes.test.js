@@ -7,24 +7,33 @@ const test = require('node:test');
 const { generateRoutesConfig, routesFileName } = require('../src/routes');
 
 test('the starter app demonstrates home and dynamic file routes', () => {
-  const templates = path.join(__dirname, '..', 'templates', 'app');
+  const templateRoot = path.join(__dirname, '..', 'templates');
+  const templates = path.join(templateRoot, 'app');
+  const app = fs.readFileSync(path.join(templateRoot, 'App.jsx'), 'utf8');
   const home = fs.readFileSync(path.join(templates, 'index.tsx'), 'utf8');
   const profile = fs.readFileSync(path.join(templates, 'profile', '[id].tsx'), 'utf8');
   const starter = `${home}\n${profile}`;
 
+  assert.match(app, /<ScrollView/);
+  assert.match(app, /contentContainerStyle=\{\{ flexGrow: 1 \}\}/);
   assert.match(home, /navigate\('\/profile\/ada'\)/);
   assert.match(home, /brandLockup, brandMark/);
   assert.match(home, /<html\.img/);
   assert.match(home, /<html\.span>Ready to customize<\/html\.span>/);
   assert.match(home, /<html\.span>\s*\{completed\.length\} of \{steps\.length\} complete/);
+  assert.match(home, /useCompactLayout\(\)/);
   assert.match(profile, /brandMark/);
   assert.match(profile, /function ProfilePage\(\{ id \}/);
   assert.match(profile, /app\/profile\/\[id\]\.tsx/);
   assert.match(profile, /<html\.span>Dynamic route · \/profile\/\{profileId\}<\/html\.span>/);
   assert.match(profile, /<html\.span>Dynamic file route<\/html\.span>/);
   assert.match(profile, /<html\.span>\/profile\/\{profile\.id\}<\/html\.span>/);
+  assert.match(profile, /useCompactLayout\(\)/);
   assert.equal(fs.existsSync(path.join(templates, 'about.tsx')), false);
   assert.doesNotMatch(starter, /window\.location/);
+  assert.doesNotMatch(starter, /minHeight: '100%'/);
+  assert.doesNotMatch(starter, /maxWidth: '100%'/);
+  assert.doesNotMatch(starter, /lineHeight: 1\./);
 });
 
 test('does not rewrite unchanged generated routes', t => {

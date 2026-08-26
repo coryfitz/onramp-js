@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { html } from 'react-strict-dom';
 import { brandMark } from '../../src/brand-image';
 import { useNavigation } from '../../src/navigation/NavigationProvider';
+import { useCompactLayout } from '../../src/use-compact-layout';
 
 const palette = {
   ink: '#071C47',
@@ -30,6 +31,7 @@ function displayName(id?: string) {
 
 export default function ProfilePage({ id }: { id?: string }) {
   const { navigate } = useNavigation();
+  const isCompact = useCompactLayout();
   const [connected, setConnected] = useState(false);
   const profileId = id || 'new-builder';
   const name = displayName(id);
@@ -37,7 +39,6 @@ export default function ProfilePage({ id }: { id?: string }) {
   return (
     <html.div
       style={{
-        minHeight: '100%',
         flex: 1,
         display: 'flex',
         flexDirection: 'column',
@@ -45,16 +46,24 @@ export default function ProfilePage({ id }: { id?: string }) {
         backgroundColor: palette.canvas,
         color: palette.ink,
         fontFamily: 'system-ui, -apple-system, BlinkMacSystemFont, sans-serif',
-        padding: 20,
+        padding: isCompact ? 16 : 20,
       } as any}
     >
-      <html.div style={{ width: '100%', maxWidth: 1120, alignSelf: 'center' } as any}>
+      <html.div
+        style={{
+          width: '100%',
+          maxWidth: 1120,
+          boxSizing: 'border-box',
+          alignSelf: 'center',
+        } as any}
+      >
         <html.div
           style={{
             display: 'flex',
-            alignItems: 'center',
+            flexDirection: isCompact ? 'column' : 'row',
+            alignItems: isCompact ? 'stretch' : 'center',
             justifyContent: 'space-between',
-            flexWrap: 'wrap',
+            flexWrap: isCompact ? 'nowrap' : 'wrap',
             gap: 16,
             marginBottom: 28,
           } as any}
@@ -106,19 +115,22 @@ export default function ProfilePage({ id }: { id?: string }) {
         <html.div
           style={{
             display: 'flex',
-            flexWrap: 'wrap',
+            flexDirection: isCompact ? 'column' : 'row',
+            flexWrap: isCompact ? 'nowrap' : 'wrap',
             gap: 20,
             marginBottom: 20,
           } as any}
         >
           <html.div
             style={{
-              flex: 2,
-              minWidth: 280,
+              flex: isCompact ? 0 : 2,
+              minWidth: isCompact ? 0 : 280,
+              width: isCompact ? '100%' : undefined,
+              boxSizing: 'border-box',
               borderRadius: 28,
               backgroundColor: palette.ink,
               color: 'white',
-              padding: 36,
+              padding: isCompact ? 24 : 36,
               overflow: 'hidden',
             } as any}
           >
@@ -155,9 +167,9 @@ export default function ProfilePage({ id }: { id?: string }) {
             </html.div>
             <html.h1
               style={{
-                fontSize: 52,
-                lineHeight: 1.02,
-                letterSpacing: -2,
+                fontSize: isCompact ? 36 : 52,
+                lineHeight: '1.02',
+                letterSpacing: isCompact ? -1 : -2,
                 margin: 0,
                 marginBottom: 20,
                 maxWidth: 620,
@@ -169,7 +181,7 @@ export default function ProfilePage({ id }: { id?: string }) {
               style={{
                 color: '#C9D6EA',
                 fontSize: 17,
-                lineHeight: 1.6,
+                lineHeight: '1.6',
                 margin: 0,
                 marginBottom: 28,
                 maxWidth: 590,
@@ -214,8 +226,10 @@ export default function ProfilePage({ id }: { id?: string }) {
 
           <html.div
             style={{
-              flex: 1,
-              minWidth: 250,
+              flex: isCompact ? 0 : 1,
+              minWidth: isCompact ? 0 : 250,
+              width: isCompact ? '100%' : undefined,
+              boxSizing: 'border-box',
               borderRadius: 28,
               backgroundColor: palette.surface,
               border: `1px solid ${palette.line}`,
@@ -285,7 +299,14 @@ export default function ProfilePage({ id }: { id?: string }) {
               The same file renders every profile
             </html.div>
           </html.div>
-          <html.div style={{ display: 'flex', flexWrap: 'wrap', gap: 12 } as any}>
+          <html.div
+            style={{
+              display: 'flex',
+              flexDirection: isCompact ? 'column' : 'row',
+              flexWrap: isCompact ? 'nowrap' : 'wrap',
+              gap: 12,
+            } as any}
+          >
             {exampleProfiles.map(profile => {
               const isCurrent = profile.id === profileId;
               return (
@@ -293,8 +314,10 @@ export default function ProfilePage({ id }: { id?: string }) {
                   key={profile.id}
                   onClick={() => navigate(`/profile/${profile.id}`)}
                   style={{
-                    flex: 1,
-                    minWidth: 190,
+                    flex: isCompact ? 0 : 1,
+                    minWidth: isCompact ? 0 : 190,
+                    width: isCompact ? '100%' : undefined,
+                    boxSizing: 'border-box',
                     textAlign: 'left',
                     border: `1px solid ${isCurrent ? '#B7CBEA' : palette.line}`,
                     borderRadius: 18,
