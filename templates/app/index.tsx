@@ -112,7 +112,7 @@ export default function HomePage() {
             } as any}
           >
             <html.span style={{ fontSize: 10 } as any}>●</html.span>
-            Ready to customize
+            <html.span>Ready to customize</html.span>
           </html.div>
         </html.div>
 
@@ -262,7 +262,9 @@ export default function HomePage() {
               </html.h2>
             </html.div>
             <html.div style={{ color: palette.muted, fontSize: 14 } as any}>
-              {completed.length} of {steps.length} complete · tap a step to update
+              <html.span>
+                {completed.length} of {steps.length} complete · tap a step to update
+              </html.span>
             </html.div>
           </html.div>
           <html.div style={{ display: 'flex', flexWrap: 'wrap', gap: 12 } as any}>

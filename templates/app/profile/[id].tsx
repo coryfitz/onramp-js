@@ -99,7 +99,7 @@ export default function ProfilePage({ id }: { id?: string }) {
               fontWeight: '700',
             } as any}
           >
-            Dynamic route · /profile/{profileId}
+            <html.span>Dynamic route · /profile/{profileId}</html.span>
           </html.div>
         </html.div>
 
@@ -151,7 +151,7 @@ export default function ProfilePage({ id }: { id?: string }) {
               >
                 {name.charAt(0)}
               </html.span>
-              Dynamic file route
+              <html.span>Dynamic file route</html.span>
             </html.div>
             <html.h1
               style={{
@@ -320,7 +320,7 @@ export default function ProfilePage({ id }: { id?: string }) {
                     </html.span>
                   </html.div>
                   <html.div style={{ color: palette.muted, fontSize: 13 } as any}>
-                    /profile/{profile.id}
+                    <html.span>/profile/{profile.id}</html.span>
                   </html.div>
                 </html.button>
               );

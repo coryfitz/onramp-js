@@ -15,9 +15,14 @@ test('the starter app demonstrates home and dynamic file routes', () => {
   assert.match(home, /navigate\('\/profile\/ada'\)/);
   assert.match(home, /brandLockup, brandMark/);
   assert.match(home, /<html\.img/);
+  assert.match(home, /<html\.span>Ready to customize<\/html\.span>/);
+  assert.match(home, /<html\.span>\s*\{completed\.length\} of \{steps\.length\} complete/);
   assert.match(profile, /brandMark/);
   assert.match(profile, /function ProfilePage\(\{ id \}/);
   assert.match(profile, /app\/profile\/\[id\]\.tsx/);
+  assert.match(profile, /<html\.span>Dynamic route · \/profile\/\{profileId\}<\/html\.span>/);
+  assert.match(profile, /<html\.span>Dynamic file route<\/html\.span>/);
+  assert.match(profile, /<html\.span>\/profile\/\{profile\.id\}<\/html\.span>/);
   assert.equal(fs.existsSync(path.join(templates, 'about.tsx')), false);
   assert.doesNotMatch(starter, /window\.location/);
 });
