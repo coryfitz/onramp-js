@@ -237,6 +237,49 @@ On web, React Strict DOM `css.create` rules are injected into the page by the
 StyleX transform. Files placed in `assets/` are served by the development
 server and copied to the root of `dist/` by production builds.
 
+### Cross-platform layout contract
+
+Generated routes use typed `css.create` styles rather than untyped inline
+objects. Native layout elements cannot contain bare text nodes, so text inside
+an `html.div` belongs in an `html.span` or another text-bearing element.
+Unitless CSS line-height ratios must be strings (`'1.5'`); React Native treats
+numeric line heights as absolute points. Percentage dimensions require
+`boxSizing: 'border-box'`, though flex sizing is preferred when possible.
+
+Scrolling is route-owned. The generated `ScrollScreen` component provides a
+native `ScrollView` and a transparent web wrapper for document-like pages.
+Routes built around a `FlatList`, their own `ScrollView`, a map, or a fixed
+canvas should not use it. This prevents a framework-level scroll container
+from breaking list virtualization or specialized screen layouts.
+
+Responsive helpers use platform resolution: `use-compact-layout.ts` reads
+React Native `useWindowDimensions`, while `use-compact-layout.web.ts` follows
+browser viewport changes. Import the helper without an extension and keep
+helpers outside `app/`, which is reserved for route modules.
+
+The generated Jest suite renders the home and dynamic routes through the
+native renderer at compact and wide sizes. It rejects bare native text errors,
+unsupported style values, and invalid percentage-sizing warnings. Still run a
+simulator or emulator smoke test for meaningful native layout changes; web
+typechecking and bundling alone cannot validate native presentation.
+
+## Release verification
+
+Release the npm package before publishing a Python package that pins it. Run
+the generator tests, then create a disposable project outside both source
+worktrees from `npm pack` output, using `ONRAMP_JS_PACKAGE_SPEC` to point the
+generator at that tarball. This tests a real installed package layout without
+requiring the new version to exist on npm yet; a `file:` dependency can retain
+source-repository resolution behavior and is not equivalent. Run the generated
+app's tests, typecheck, and production web build. After npm publishes, repeat
+that scaffold check using the exact public npm version.
+
+After the Python release pins the verified npm version, create another clean
+project with the exact public PyPI version and repeat the generated-project
+checks. This final check matters because the Python source checkout executes
+the nested local `onramp-js` repository, while an installed Python package
+resolves the version in `src/onramp/config.toml` from npm.
+
 ## Optional device-only secure storage
 
 Install the native adapter only in apps that store credentials or other

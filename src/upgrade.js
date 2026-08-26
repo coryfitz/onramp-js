@@ -168,6 +168,11 @@ function planFrontendUpgrade(outputDir) {
   targetPackage.jest.testPathIgnorePatterns = (
     targetPackage.jest.testPathIgnorePatterns || ['/node_modules/', '/ios/']
   );
+  targetPackage.jest.transformIgnorePatterns = (
+    targetPackage.jest.transformIgnorePatterns || [
+      'node_modules/(?!(react-native|@react-native|react-strict-dom|@stylexjs)/)',
+    ]
+  );
   if (targetPackage.jest.watchman === undefined) {
     targetPackage.jest.watchman = false;
   }

@@ -118,9 +118,14 @@ test('applies a frontend upgrade with a recoverable backup', t => {
   assert.equal(calls[0][0], 'npm');
   assert.ok(fs.existsSync(path.join(outputDir, FRONTEND_MANIFEST)));
   assert.ok(fs.existsSync(path.join(backupDir, 'babel.config.js')));
+  const upgradedPackage = require(path.join(outputDir, 'package.json'));
   assert.equal(
-    require(path.join(outputDir, 'package.json')).devDependencies['onramp-js'],
+    upgradedPackage.devDependencies['onramp-js'],
     packageJson.version
+  );
+  assert.match(
+    upgradedPackage.jest.transformIgnorePatterns[0],
+    /react-strict-dom/
   );
 });
 

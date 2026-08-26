@@ -44,6 +44,44 @@ The command remains attached to its Metro process; press Ctrl+C to stop it.
 The root app includes safe-area context. Keep screen content inside the
 generated safe-area provider or use `useSafeAreaInsets` for custom layouts.
 
+## Cross-platform layout and styling
+
+OnRamp uses React Strict DOM so the same route can render on web, iOS, and
+Android. Define styles with `css.create` and pass the resulting typed styles to
+the `style` prop. Avoid casting inline style objects with `as any`; those casts
+hide values that browsers accept but native renderers reject.
+
+Native text must live in a text-bearing element. In particular, wrap text and
+interpolated values inside layout elements with `html.span`:
+
+```tsx
+<html.div style={styles.status}>
+  <html.span>{status}</html.span>
+</html.div>
+```
+
+Use strings for unitless CSS line-height ratios, such as
+`lineHeight: '1.5'`. A numeric value such as `1.5` is interpreted by React
+Native as an absolute 1.5-point line height. Percentage dimensions require
+`boxSizing: 'border-box'`; flex sizing is usually more predictable across all
+three targets.
+
+Each route owns its scrolling behavior. Wrap a normal document-like route in
+`ScrollScreen`, as the generated home and dynamic routes do. Do not wrap a
+route that owns a `FlatList`, another `ScrollView`, a map, or a fixed canvas;
+nested vertical scroll containers interfere with native list virtualization.
+
+Responsive behavior is platform-resolved through
+`src/use-compact-layout.ts` and `src/use-compact-layout.web.ts`. Native uses
+`useWindowDimensions`, while web listens for viewport resizing. Keep shared
+imports extension-free and place non-route helpers under `src/`, not `app/`.
+
+Run `npm test` after changing shared route markup or styles. The starter's
+native render smoke test exercises compact and wide versions of both routes
+and fails on raw native text and known cross-platform style warnings. A web
+build cannot detect every native rendering problem, so verify meaningful
+layout changes in at least one simulator or emulator as well.
+
 Native display names, versions, identifiers, and the launcher icon are defined
 in `app.json`. The icon must be a 1024×1024 PNG inside this project. OnRamp
 synchronizes those values whenever a native platform is added or run without

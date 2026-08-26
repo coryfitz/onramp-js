@@ -1,8 +1,53 @@
 // Route registry and component loader
 import React, { lazy, ComponentType, useState, useEffect } from 'react';
 import { routes, routeComponents } from '../generated/routes';
-import { html } from 'react-strict-dom';
+import { css, html } from 'react-strict-dom';
 import { useNavigation } from './NavigationProvider';
+
+const screenStyles = css.create({
+  fill: {
+    position: 'absolute',
+    top: 0,
+    right: 0,
+    bottom: 0,
+    left: 0,
+    display: 'flex',
+    justifyContent: 'center',
+    alignItems: 'center',
+    fontFamily: 'system-ui, -apple-system, sans-serif',
+  },
+  loadingContent: { textAlign: 'center' },
+  loadingTitle: { fontSize: 18, marginBottom: 8 },
+  loadingCopy: { fontSize: 14, color: '#666' },
+  notFoundBackground: { backgroundColor: '#f5f5f5' },
+  notFoundCard: {
+    textAlign: 'center',
+    backgroundColor: 'white',
+    padding: 40,
+    borderRadius: 12,
+    boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
+    maxWidth: 500,
+    alignSelf: 'center',
+  },
+  notFoundCode: { fontSize: 48, margin: 0, marginBottom: 16, color: '#333' },
+  notFoundTitle: { fontSize: 24, margin: 0, marginBottom: 16, color: '#666' },
+  notFoundCopy: { fontSize: 16, color: '#888', marginBottom: 24 },
+  homeButton: {
+    paddingBlock: 12,
+    paddingInline: 24,
+    backgroundColor: '#007AFF',
+    color: 'white',
+    borderWidth: 0,
+    borderRadius: 8,
+    fontSize: 16,
+    cursor: 'pointer',
+  },
+  error: {
+    padding: 20,
+    color: 'red',
+    fontFamily: 'system-ui, -apple-system, sans-serif',
+  },
+});
 
 // Cache for loaded components
 const componentCache = new Map<string, ComponentType<any>>();
@@ -98,20 +143,14 @@ export const routeRegistry = new RouteRegistry();
 // Loading component
 function LoadingScreen() {
   return (
-    <html.div
-      style={{
-        position: 'absolute',
-        top: 0, right: 0, bottom: 0, left: 0, // fill
-        display: 'flex',
-        justifyContent: 'center',
-        alignItems: 'center',
-        fontFamily: 'system-ui, -apple-system, sans-serif',
-        // optional: backgroundColor: '#f5f5f5',
-      }as any}
-    >
-      <html.div style={{ textAlign: 'center' }as any}>
-        <html.div style={{ fontSize: 18, marginBottom: 8 }as any}>Loading...</html.div>
-        <html.div style={{ fontSize: 14, color: '#666' }as any}>Please wait</html.div>
+    <html.div style={screenStyles.fill}>
+      <html.div style={screenStyles.loadingContent}>
+        <html.div style={screenStyles.loadingTitle}>
+          <html.span>Loading...</html.span>
+        </html.div>
+        <html.div style={screenStyles.loadingCopy}>
+          <html.span>Please wait</html.span>
+        </html.div>
       </html.div>
     </html.div>
   );
@@ -122,50 +161,20 @@ function NotFoundScreen({ path }: { path: string }) {
   const { navigate } = useNavigation();
 
   return (
-    <html.div
-      style={{
-        position: 'absolute',
-        top: 0, right: 0, bottom: 0, left: 0, // fill
-        display: 'flex',
-        justifyContent: 'center',
-        alignItems: 'center',
-        fontFamily: 'system-ui, -apple-system, sans-serif',
-        backgroundColor: '#f5f5f5',
-      }as any}
-    >
-      <html.div
-        style={{
-          textAlign: 'center',
-          backgroundColor: 'white',
-          padding: 40,
-          borderRadius: 12,
-          boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
-          maxWidth: 500,
-          alignSelf: 'center',
-        }as any}
-      >
-        <html.h1 style={{ fontSize: 48, margin: 0, marginBottom: 16, color: '#333' }as any}>
-          404
-        </html.h1>
-        <html.h2 style={{ fontSize: 24, margin: 0, marginBottom: 16, color: '#666' }as any}>
+    <html.div style={[screenStyles.fill, screenStyles.notFoundBackground]}>
+      <html.div style={screenStyles.notFoundCard}>
+        <html.h1 style={screenStyles.notFoundCode}>404</html.h1>
+        <html.h2 style={screenStyles.notFoundTitle}>
           Page Not Found
         </html.h2>
-        <html.p style={{ fontSize: 16, color: '#888', marginBottom: 24 }as any}>
+        <html.p style={screenStyles.notFoundCopy}>
           The page "{path}" could not be found.
         </html.p>
         <html.button
           onClick={() => navigate('/')}
-          style={{
-            padding: '12px 24px',
-            backgroundColor: '#007AFF',
-            color: 'white',
-            border: 'none',
-            borderRadius: 8,
-            fontSize: 16,
-            cursor: 'pointer',
-          }as any}
+          style={screenStyles.homeButton}
         >
-          Go Home
+          <html.span>Go Home</html.span>
         </html.button>
       </html.div>
     </html.div>
@@ -229,11 +238,7 @@ export function RouteComponent({ path, params = {} }: RouteComponentProps) {
 
   if (error) {
     return (
-      <html.div style={{
-        padding: 20,
-        color: 'red',
-        fontFamily: 'system-ui, -apple-system, sans-serif'
-      } as any }>
+      <html.div style={screenStyles.error}>
         <html.h2>Error Loading Route</html.h2>
         <html.p>{error}</html.p>
       </html.div>

@@ -12,10 +12,22 @@ test('the starter app demonstrates home and dynamic file routes', () => {
   const app = fs.readFileSync(path.join(templateRoot, 'App.jsx'), 'utf8');
   const home = fs.readFileSync(path.join(templates, 'index.tsx'), 'utf8');
   const profile = fs.readFileSync(path.join(templates, 'profile', '[id].tsx'), 'utf8');
-  const starter = `${home}\n${profile}`;
+  const nativeSmoke = fs.readFileSync(
+    path.join(templateRoot, 'test', 'starter-native.test.tsx'),
+    'utf8'
+  );
+  const routeRegistry = fs.readFileSync(
+    path.join(templateRoot, 'src', 'navigation', 'RouteRegistry.tsx'),
+    'utf8'
+  );
+  const starter = `${home}\n${profile}\n${routeRegistry}`;
 
-  assert.match(app, /<ScrollView/);
-  assert.match(app, /contentContainerStyle=\{\{ flexGrow: 1 \}\}/);
+  assert.doesNotMatch(app, /ScrollView/);
+  assert.match(home, /<ScrollScreen>/);
+  assert.match(profile, /<ScrollScreen>/);
+  assert.match(nativeSmoke, /Text strings must be rendered within a <Text>/);
+  assert.match(nativeSmoke, /unsupported style value/);
+  assert.match(routeRegistry, /<html\.span>Loading\.\.\.<\/html\.span>/);
   assert.match(home, /navigate\('\/profile\/ada'\)/);
   assert.match(home, /brandLockup, brandMark/);
   assert.match(home, /<html\.img/);
@@ -34,6 +46,7 @@ test('the starter app demonstrates home and dynamic file routes', () => {
   assert.doesNotMatch(starter, /minHeight: '100%'/);
   assert.doesNotMatch(starter, /maxWidth: '100%'/);
   assert.doesNotMatch(starter, /lineHeight: 1\./);
+  assert.doesNotMatch(starter, /as any/);
 });
 
 test('does not rewrite unchanged generated routes', t => {

@@ -25,7 +25,7 @@ jobs:
 
       - uses: actions/setup-node@v6
         with:
-          node-version: "24"
+          node-version: "20"
           registry-url: "https://registry.npmjs.org"
           package-manager-cache: false
 
@@ -70,12 +70,26 @@ jobs:
 
       - uses: actions/setup-node@v6
         with:
-          node-version: "24"
+          node-version: "20"
           registry-url: "https://registry.npmjs.org"
           package-manager-cache: false
 
       - name: Run tests
         run: npm test
+
+      - name: Test a locally generated universal app
+        run: |
+          app_dir="${RUNNER_TEMP}/onramp-js-local-smoke"
+          package_version="$(node -p "require('./package.json').version")"
+          package_tarball="${RUNNER_TEMP}/onramp-js-${package_version}.tgz"
+          npm pack --pack-destination "${RUNNER_TEMP}"
+          cd "${RUNNER_TEMP}"
+          ONRAMP_JS_PACKAGE_SPEC="${package_tarball}" \
+            node "${GITHUB_WORKSPACE}/bin/onramp-js.js" create onramp-js-local-smoke
+          cd "${app_dir}"
+          npm test
+          npm run typecheck
+          npm run build:web
 
       - run: npm publish
 
@@ -92,7 +106,7 @@ jobs:
 
       - uses: actions/setup-node@v6
         with:
-          node-version: "24"
+          node-version: "20"
           registry-url: "https://registry.npmjs.org"
           package-manager-cache: false
 
@@ -110,3 +124,16 @@ jobs:
           done
           echo "${package_name}@${package_version} is not installable after 10 minutes." >&2
           exit 1
+
+      - name: Test a scaffold from the public npm package
+        env:
+          PACKAGE_VERSION: ${{ needs.check_version.outputs.version }}
+        run: |
+          app_dir="${RUNNER_TEMP}/onramp-js-public-smoke"
+          cd "${RUNNER_TEMP}"
+          npm exec --yes --package "onramp-js@${PACKAGE_VERSION}" -- \
+            onramp-js create onramp-js-public-smoke
+          cd "${app_dir}"
+          npm test
+          npm run typecheck
+          npm run build:web

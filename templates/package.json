@@ -63,6 +63,9 @@
       "/node_modules/",
       "/ios/"
     ],
+    "transformIgnorePatterns": [
+      "node_modules/(?!(react-native|@react-native|react-strict-dom|@stylexjs)/)"
+    ],
     "watchman": false
   },
   "engines": {
