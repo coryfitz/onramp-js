@@ -91,6 +91,13 @@ jobs:
           npm run typecheck
           npm run build:web
 
+      - name: Prepare npm trusted publishing
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          registry-url: "https://registry.npmjs.org"
+          package-manager-cache: false
+
       - run: npm publish
 
   verify:
