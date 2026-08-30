@@ -1,5 +1,5 @@
 import React, {createContext, useContext, useMemo} from 'react';
-import {Platform} from 'react-native';
+import {runtimePlatform} from './runtime-platform';
 
 export type AppEnvironment = 'development' | 'staging' | 'production';
 
@@ -16,7 +16,7 @@ interface RuntimeConfigInput {
 const RuntimeConfigContext = createContext<RuntimeConfig | null>(null);
 
 function developmentApiBaseUrl() {
-  return Platform.OS === 'android'
+  return runtimePlatform === 'android'
     ? 'http://10.0.2.2:8000'
     : 'http://127.0.0.1:8000';
 }
@@ -29,7 +29,7 @@ export function resolveRuntimeConfig(input: RuntimeConfigInput = {}): RuntimeCon
       : 'development';
   const configuredApiBaseUrl = typeof input.apiBaseUrl === 'string'
     ? input.apiBaseUrl
-    : input.apiBaseUrl?.[Platform.OS as 'web' | 'ios' | 'android'];
+    : input.apiBaseUrl?.[runtimePlatform];
   const apiBaseUrl = (
     configuredApiBaseUrl ||
     (appEnvironment === 'development' ? developmentApiBaseUrl() : '')

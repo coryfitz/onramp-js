@@ -1,7 +1,8 @@
 // Route registry and component loader
 import React, { lazy, ComponentType, useState, useEffect } from 'react';
 import { routes, routeComponents } from '../generated/routes';
-import { css, html } from 'react-strict-dom';
+import * as css from '@stylexjs/stylex';
+import { html } from 'react-strict-dom';
 import { useNavigation } from './NavigationProvider';
 
 const screenStyles = css.create({

@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
-import { css, html } from 'react-strict-dom';
+import * as css from '@stylexjs/stylex';
+import { html } from 'react-strict-dom';
 import { brandMark } from '../../src/brand-image';
 import { ScrollScreen } from '../../src/components/ScrollScreen';
 import { useNavigation } from '../../src/navigation/NavigationProvider';

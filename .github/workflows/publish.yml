@@ -89,7 +89,7 @@ jobs:
           cd "${app_dir}"
           npm test
           npm run typecheck
-          npm run build:web
+          npm run build:web -- --fail-on-warnings
 
       - name: Prepare npm trusted publishing
         uses: actions/setup-node@v6
@@ -159,4 +159,4 @@ jobs:
           cd "${app_dir}"
           npm test
           npm run typecheck
-          npm run build:web
+          npm run build:web -- --fail-on-warnings

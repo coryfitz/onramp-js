@@ -20,6 +20,9 @@ test('the starter app demonstrates home and dynamic file routes', () => {
     path.join(templateRoot, 'src', 'navigation', 'RouteRegistry.tsx'),
     'utf8'
   );
+  const packageJson = JSON.parse(
+    fs.readFileSync(path.join(templateRoot, 'package.json'), 'utf8')
+  );
   const starter = `${home}\n${profile}\n${routeRegistry}`;
 
   assert.doesNotMatch(app, /ScrollView/);
@@ -46,6 +49,10 @@ test('the starter app demonstrates home and dynamic file routes', () => {
   assert.match(profile, /useCompactLayout\(\)/);
   assert.equal(fs.existsSync(path.join(templates, 'about.tsx')), false);
   assert.doesNotMatch(starter, /window\.location/);
+  assert.equal(packageJson.dependencies['@stylexjs/stylex'], '^0.14.1');
+  assert.equal(packageJson.devDependencies['@stylexjs/babel-plugin'], '^0.14.1');
+  assert.match(starter, /import \* as css from '@stylexjs\/stylex';/);
+  assert.doesNotMatch(starter, /import \{\s*css,\s*html\s*\} from 'react-strict-dom'/);
   assert.doesNotMatch(starter, /minHeight: '100%'/);
   assert.doesNotMatch(starter, /maxWidth: '100%'/);
   assert.doesNotMatch(starter, /lineHeight: 1\./);
