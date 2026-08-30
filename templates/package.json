@@ -13,8 +13,8 @@
     "start": "npm run start:native",
     "web": "npm run start:web",
     "build:routes": "node scripts/build-routes.js",
-    "typecheck": "tsc --noEmit",
-    "test": "jest --runInBand"
+    "typecheck": "node scripts/build-routes.js && tsc --noEmit",
+    "test": "node scripts/build-routes.js && jest --runInBand"
   },
   "dependencies": {
     "@react-navigation/bottom-tabs": "^6.6.1",
@@ -56,6 +56,11 @@
   },
   "jest": {
     "preset": "react-native",
+    "roots": [
+      "<rootDir>/app",
+      "<rootDir>/src",
+      "<rootDir>/test"
+    ],
     "modulePathIgnorePatterns": [
       "/.onramp/backups/"
     ],
@@ -64,7 +69,7 @@
       "/ios/"
     ],
     "transformIgnorePatterns": [
-      "node_modules/(?!(react-native|@react-native|react-strict-dom|@stylexjs)/)"
+      "node_modules/(?!(react-native|@react-native|react-strict-dom|@stylexjs|onramp-js)/)"
     ],
     "watchman": false
   },

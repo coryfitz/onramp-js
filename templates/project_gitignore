@@ -3,7 +3,8 @@ dist/
 *.log
 .DS_Store
 
-# Generated platform route registries
+# Generated runtime and platform route registries
+src/generated/runtime-config.json
 src/generated/routes.android.ts
 src/generated/routes.ios.ts
 src/generated/routes.web.ts

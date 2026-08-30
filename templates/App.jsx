@@ -2,6 +2,8 @@ import React from 'react';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { NavigationProvider, useNavigation } from './src/navigation/NavigationProvider';
 import { RouteComponent } from './src/navigation/RouteRegistry';
+import {RuntimeConfigProvider} from 'onramp-js/runtime-config';
+import runtimeConfig from './src/generated/runtime-config.json';
 
 function AppContent() {
   const { currentRoute, params } = useNavigation();
@@ -11,11 +13,13 @@ function AppContent() {
 export default function App() {
   return (
     <SafeAreaProvider>
-      <SafeAreaView style={{ flex: 1 }}>
-        <NavigationProvider initialRoute="/">
-          <AppContent />
-        </NavigationProvider>
-      </SafeAreaView>
+      <RuntimeConfigProvider initialConfig={runtimeConfig}>
+        <SafeAreaView style={{ flex: 1 }}>
+          <NavigationProvider initialRoute="/">
+            <AppContent />
+          </NavigationProvider>
+        </SafeAreaView>
+      </RuntimeConfigProvider>
     </SafeAreaProvider>
   );
 }

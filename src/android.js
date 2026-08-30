@@ -1305,6 +1305,7 @@ async function prepareAndroidDevelopment({
   name,
   output,
   watchDiagnostics = false,
+  environment: appEnvironment,
 }) {
   const outputDir = path.resolve(output || process.cwd());
   console.log('Preparing Android development...');
@@ -1320,6 +1321,7 @@ async function prepareAndroidDevelopment({
     platform: 'android',
     name,
     output: outputDir,
+    environment: appEnvironment,
   });
   const applicationId = androidApplicationId(outputDir, native.nativeConfig);
   return { applicationId, environment, outputDir };

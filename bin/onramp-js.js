@@ -14,7 +14,7 @@ function printUsage() {
   onramp-js create --name <app-name> --output <directory> [--mobile | --all]
   onramp-js add <ios | android | mobile> [--output <directory>]
   onramp-js doctor [web | ios | android | mobile | all]
-  onramp-js run <web | ios | android | mobile> [--output <directory>] [--metro-port <port>] [--watch-diagnostics] [--rebuild]
+  onramp-js run <web | ios | android | mobile> [--output <directory>] [--environment <development | staging | production>] [--metro-port <port>] [--watch-diagnostics] [--rebuild]
   onramp-js repair ios [--output <directory>] [--fresh]
   onramp-js upgrade [--output <directory>] [--check]
 
@@ -30,6 +30,7 @@ Options:
   --mobile  Include both iOS and Android projects
   --all     Include every supported platform
   --metro-port  Select a free port to use for the native Metro bundler
+  --environment  Select the development, staging, or production app profile
   --watch-diagnostics  Log source paths that can trigger native Fast Refresh
   --rebuild  Force a fresh native app build instead of reusing an unchanged installation
   --fresh   Recreate Podfile.lock during an iOS repair
@@ -131,13 +132,15 @@ function parseRunArgs(args) {
 
   for (let index = 0; index < args.length; index += 1) {
     const argument = args[index];
-    if (argument === '--name' || argument === '--output' || argument === '--metro-port') {
+    if (argument === '--name' || argument === '--output' || argument === '--metro-port' || argument === '--environment') {
       const value = args[index + 1];
       if (!value || value.startsWith('--')) {
         throw new Error(`Missing value for ${argument}`);
       }
       if (argument === '--metro-port') {
         options.metroPort = normalizePort(value);
+      } else if (argument === '--environment') {
+        options.environment = value;
       } else {
         options[argument.slice(2)] = value;
       }

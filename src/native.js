@@ -53,7 +53,7 @@ function ensureNativeCliDependencies(outputDir) {
   }
 }
 
-async function addNativePlatforms({ platform, name, output }) {
+async function addNativePlatforms({ platform, name, output, environment = null }) {
   const outputDir = path.resolve(output || process.cwd());
   const packagePath = path.join(outputDir, 'package.json');
   const appJsonPath = path.join(outputDir, 'app.json');
@@ -64,7 +64,7 @@ async function addNativePlatforms({ platform, name, output }) {
 
   const directories = platformDirectories(platform);
   ensureNativeCliDependencies(outputDir);
-  const nativeConfig = prepareNativeConfig(outputDir, name);
+  const nativeConfig = prepareNativeConfig(outputDir, name, environment);
   const nativeName = nativeConfig.name;
   const missing = directories.filter(
     directory => !fs.existsSync(path.join(outputDir, directory))

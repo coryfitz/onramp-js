@@ -77,6 +77,7 @@ test('merges generated output ignores without replacing project rules', t => {
 
   assert.match(change.content, /^custom-cache\//);
   assert.match(change.content, /routes\.android\.ts/);
+  assert.match(change.content, /runtime-config\.json/);
   assert.match(change.content, /android\/app\/\.cxx\//);
   assert.equal(updatedFrontendGitignore(change.content), change.content);
   assert.deepEqual(plan.conflicts, []);
@@ -125,8 +126,10 @@ test('applies a frontend upgrade with a recoverable backup', t => {
   );
   assert.match(
     upgradedPackage.jest.transformIgnorePatterns[0],
-    /react-strict-dom/
+    /onramp-js/
   );
+  assert.match(upgradedPackage.scripts.typecheck, /build-routes/);
+  assert.ok(upgradedPackage.jest.modulePathIgnorePatterns.includes('/ios/'));
 });
 
 test('restores frontend files when dependency installation fails', t => {

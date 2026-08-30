@@ -10,5 +10,26 @@
   "ios": {
     "bundleIdentifier": "com.onrampapp",
     "buildNumber": "1"
+  },
+  "environments": {
+    "development": {
+      "identifierSuffix": ".dev",
+      "displayNameSuffix": " Dev",
+      "apiBaseUrl": {
+        "web": "http://127.0.0.1:8000",
+        "ios": "http://127.0.0.1:8000",
+        "android": "http://10.0.2.2:8000"
+      }
+    },
+    "staging": {
+      "identifierSuffix": ".beta",
+      "displayNameSuffix": " Beta",
+      "apiBaseUrl": ""
+    },
+    "production": {
+      "identifierSuffix": "",
+      "displayNameSuffix": "",
+      "apiBaseUrl": ""
+    }
   }
 }

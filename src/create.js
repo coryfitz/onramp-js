@@ -9,6 +9,7 @@ const {
 const { writeFrontendManifest } = require('./project');
 const { isPythonWrapper, run } = require('./process');
 const onrampPackageJson = require('../package.json');
+const { writeRuntimeConfig } = require('./environment');
 
 function npmInstallArgs(pythonWrapper = false) {
   const args = ['install', '--legacy-peer-deps'];
@@ -143,6 +144,7 @@ async function createApp({ name, output, platform = 'web' }) {
       path.join(outputDir, 'logo.png')
     );
     renderProjectMetadata(outputDir, name);
+    writeRuntimeConfig(outputDir, 'development', 'web');
 
     const pythonWrapper = isPythonWrapper();
     console.log('Installing frontend dependencies...');

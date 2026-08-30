@@ -15,6 +15,7 @@ const {
 } = require('./ios');
 const { findExecutable, run } = require('./process');
 const { doctorWatchman } = require('./watchman');
+const { normalizeEnvironment, writeRuntimeConfig } = require('./environment');
 
 function nodeVersionTuple() {
   return process.versions.node
@@ -91,6 +92,7 @@ async function runMobile(options, runners = {
     name: options.name,
     output: options.output,
     watchDiagnostics: options.watchDiagnostics,
+    environment: options.environment,
   };
   const preparedAndroid = await runners.prepareAndroidDevelopment(
     preparationOptions
@@ -139,10 +141,14 @@ async function runFrontend({
   metroPort,
   rebuild,
   watchDiagnostics,
+  environment,
 }) {
   const outputDir = path.resolve(output || process.cwd());
   requireFrontend(outputDir);
   doctorWeb();
+  const selectedEnvironment = normalizeEnvironment(environment);
+  writeRuntimeConfig(outputDir, selectedEnvironment, platform);
+  process.env.ONRAMP_ENVIRONMENT = selectedEnvironment;
 
   if (platform === 'web') {
     if (metroPort !== undefined) {
@@ -164,6 +170,7 @@ async function runFrontend({
       metroPort,
       rebuild,
       watchDiagnostics,
+      environment: selectedEnvironment,
     });
     return;
   }
@@ -174,6 +181,7 @@ async function runFrontend({
       metroPort,
       rebuild,
       watchDiagnostics,
+      environment: selectedEnvironment,
     });
     return;
   }
@@ -184,6 +192,7 @@ async function runFrontend({
       metroPort,
       rebuild,
       watchDiagnostics,
+      environment: selectedEnvironment,
     });
     return;
   }

@@ -14,6 +14,7 @@ const {
 const { isPythonWrapper, run } = require('./process');
 
 const FRONTEND_GITIGNORE_ENTRIES = [
+  'src/generated/runtime-config.json',
   'src/generated/routes.android.ts',
   'src/generated/routes.ios.ts',
   'src/generated/routes.web.ts',
@@ -154,25 +155,41 @@ function planFrontendUpgrade(outputDir) {
   const currentPackage = JSON.parse(fs.readFileSync(packagePath, 'utf8'));
   const targetPackage = JSON.parse(JSON.stringify(currentPackage));
   targetPackage.scripts = targetPackage.scripts || {};
-  if (!targetPackage.scripts.typecheck) {
-    targetPackage.scripts.typecheck = 'tsc --noEmit';
+  if (
+    !targetPackage.scripts.typecheck
+    || targetPackage.scripts.typecheck === 'tsc --noEmit'
+  ) {
+    targetPackage.scripts.typecheck = (
+      'node scripts/build-routes.js && tsc --noEmit'
+    );
   }
-  if (targetPackage.scripts.test === 'jest') {
-    targetPackage.scripts.test = 'jest --runInBand';
+  if (['jest', 'jest --runInBand'].includes(targetPackage.scripts.test)) {
+    targetPackage.scripts.test = (
+      'node scripts/build-routes.js && jest --runInBand'
+    );
   }
   targetPackage.jest = targetPackage.jest || {};
   targetPackage.jest.preset = targetPackage.jest.preset || 'react-native';
   targetPackage.jest.modulePathIgnorePatterns = (
     targetPackage.jest.modulePathIgnorePatterns || ['/.onramp/backups/']
   );
+  for (const ignoredPath of ['/ios/', '/android/']) {
+    if (!targetPackage.jest.modulePathIgnorePatterns.includes(ignoredPath)) {
+      targetPackage.jest.modulePathIgnorePatterns.push(ignoredPath);
+    }
+  }
   targetPackage.jest.testPathIgnorePatterns = (
     targetPackage.jest.testPathIgnorePatterns || ['/node_modules/', '/ios/']
   );
   targetPackage.jest.transformIgnorePatterns = (
     targetPackage.jest.transformIgnorePatterns || [
-      'node_modules/(?!(react-native|@react-native|react-strict-dom|@stylexjs)/)',
+      'node_modules/(?!(react-native|@react-native|react-strict-dom|@stylexjs|onramp-js)/)',
     ]
-  );
+  ).map(pattern => (
+    pattern.includes('onramp-js')
+      ? pattern
+      : pattern.replace('@stylexjs)', '@stylexjs|onramp-js)')
+  ));
   if (targetPackage.jest.watchman === undefined) {
     targetPackage.jest.watchman = false;
   }

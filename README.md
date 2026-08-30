@@ -45,6 +45,20 @@ npx onramp-js add mobile
 The `add` command is safe to run again; platform directories that already
 exist are left in place.
 
+## Environments and runtime configuration
+
+`app.json` defines development, staging, and production profiles. Select one
+with `npx onramp-js run <platform> --environment staging`. OnRamp writes a
+universal runtime profile with platform-specific API URLs and synchronizes the
+profile's display-name and native-identifier suffixes before a native build.
+Shared code can import `RuntimeConfigProvider` and `useRuntimeConfig` from
+`onramp-js/runtime-config`.
+
+The optional `onramp-js/auth` export provides a passwordless account provider,
+native secure-session persistence, HttpOnly-cookie web sessions, and a generic
+verified notification-subscription client for backends using OnRamp's account
+batteries.
+
 ## Native identity and launcher assets
 
 `app.json` is the declarative source for native identity. On every native add

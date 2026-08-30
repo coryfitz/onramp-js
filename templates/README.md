@@ -41,6 +41,15 @@ app while current JavaScript and TypeScript continue to come from Metro. Pass
 `--rebuild` to a native run to force compilation and installation.
 The command remains attached to its Metro process; press Ctrl+C to stop it.
 
+Use `--environment development`, `--environment staging`, or
+`--environment production` to select a profile from `app.json`. Profiles share
+one universal runtime configuration while allowing platform-specific API URLs,
+display-name suffixes, and native identifier suffixes. Import
+`RuntimeConfigProvider` and `useRuntimeConfig` from
+`onramp-js/runtime-config`. Route generation refreshes the ignored runtime
+artifact, so tests, type checks, and production builds cannot accidentally
+reuse an API URL generated for a different environment.
+
 The root app includes safe-area context. Keep screen content inside the
 generated safe-area provider or use `useSafeAreaInsets` for custom layouts.
 
@@ -91,6 +100,11 @@ For device-only secrets, install `react-native-keychain@^10.0.0` with
 `--legacy-peer-deps` and use `onramp-js/secure-storage`. The optional adapter
 uses non-cloud iOS Keychain protection and Android Keystore-backed storage; it
 does not fall back to insecure web storage.
+
+Apps that enable OnRamp's backend accounts can import `AccountProvider`,
+`useAccount`, and generic verified-notification helpers from `onramp-js/auth`.
+Native bearer sessions use secure storage; web uses an HttpOnly cookie and
+never writes the session token to JavaScript storage.
 
 Frontend schema and managed tooling hashes are stored in
 `.onramp/project.json`. Upgrade backups are stored in `.onramp/backups/`.

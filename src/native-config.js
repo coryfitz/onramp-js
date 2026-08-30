@@ -5,6 +5,7 @@ const ANDROID_PACKAGE_PATTERN = /^[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]
 const IOS_BUNDLE_PATTERN = /^[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+$/;
 const NATIVE_VERSION_PATTERN = /^\d+(?:\.\d+){1,2}$/;
 const BUILD_NUMBER_PATTERN = /^\d+(?:\.\d+)*$/;
+const { resolveEnvironmentProfile } = require('./environment');
 
 function writeJson(filePath, value) {
   return writeIfChanged(filePath, `${JSON.stringify(value, null, 2)}\n`);
@@ -162,7 +163,7 @@ function validateIcon(outputDir, relativePath) {
   return iconPath;
 }
 
-function prepareNativeConfig(outputDir, requestedName) {
+function prepareNativeConfig(outputDir, requestedName, environment = null) {
   const appJsonPath = path.join(outputDir, 'app.json');
   const packagePath = path.join(outputDir, 'package.json');
   const appJson = JSON.parse(fs.readFileSync(appJsonPath, 'utf8'));
@@ -197,19 +198,25 @@ function prepareNativeConfig(outputDir, requestedName) {
   writeJson(appJsonPath, appJson);
   fs.writeFileSync(path.join(outputDir, '.nvmrc'), '20\n', 'utf8');
 
+  const profile = environment
+    ? resolveEnvironmentProfile(outputDir, environment, 'ios')
+    : { displayNameSuffix: '', identifierSuffix: '' };
   return {
     android: {
-      package: androidPackage,
+      package: androidPackage ? `${androidPackage}${profile.identifierSuffix}` : null,
       versionCode: androidVersionCode,
     },
-    displayName,
+    displayName: `${displayName}${profile.displayNameSuffix}`,
     icon,
     ios: {
       buildNumber: iosBuildNumber,
-      bundleIdentifier: iosBundleIdentifier,
+      bundleIdentifier: iosBundleIdentifier
+        ? `${iosBundleIdentifier}${profile.identifierSuffix}`
+        : null,
     },
     name,
     version,
+    environment,
   };
 }
 

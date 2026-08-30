@@ -46,6 +46,12 @@ test('parses a native Metro port separately from the output directory', () => {
   assert.equal(options.output, '/tmp/example');
 });
 
+test('parses a shared staging environment for frontend and native runs', () => {
+  const options = parseRunArgs(['mobile', '--environment', 'staging']);
+
+  assert.equal(options.environment, 'staging');
+});
+
 test('parses native source watcher diagnostics', () => {
   const options = parseRunArgs(['ios', '--watch-diagnostics']);
 

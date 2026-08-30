@@ -1222,6 +1222,7 @@ async function prepareIosDevelopment({
   name,
   output,
   watchDiagnostics = false,
+  environment: appEnvironment,
 }) {
   const outputDir = path.resolve(output || process.cwd());
   console.log('Preparing iOS development...');
@@ -1243,6 +1244,7 @@ async function prepareIosDevelopment({
     platform: 'ios',
     name,
     output: outputDir,
+    environment: appEnvironment,
   });
   const iosDir = path.join(outputDir, 'ios');
   ensureXcodeComponents(environment, iosDir);

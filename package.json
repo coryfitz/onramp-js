@@ -1,6 +1,6 @@
 {
   "name": "onramp-js",
-  "version": "0.5.20",
+  "version": "0.5.21",
   "description": "Web-first universal React Native app generator for web, iOS, and Android",
   "author": "Cory Fitz",
   "license": "MIT",
@@ -19,9 +19,12 @@
     "onramp-js": "bin/onramp-js.js"
   },
   "exports": {
+    "./auth": "./src/runtime/AuthProvider.tsx",
     "./babel": "./src/babel.js",
+    "./environment": "./src/environment.js",
     "./metro-config": "./src/metro-config.js",
     "./navigation": "./src/runtime/NavigationProvider.tsx",
+    "./runtime-config": "./src/runtime/RuntimeConfig.tsx",
     "./routes": "./src/routes.js",
     "./secure-storage": {
       "types": "./src/runtime/secure-storage.d.ts",
