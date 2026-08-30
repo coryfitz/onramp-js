@@ -138,8 +138,24 @@ jobs:
         run: |
           app_dir="${RUNNER_TEMP}/onramp-js-public-smoke"
           cd "${RUNNER_TEMP}"
-          npm exec --yes --package "onramp-js@${PACKAGE_VERSION}" -- \
-            onramp-js create onramp-js-public-smoke
+          created=false
+          for attempt in $(seq 1 120); do
+            cache_dir="${RUNNER_TEMP}/npm-public-smoke-cache-${attempt}"
+            if NPM_CONFIG_CACHE="${cache_dir}" \
+              npm exec --yes --prefer-online \
+                --package "onramp-js@${PACKAGE_VERSION}" -- \
+                onramp-js create onramp-js-public-smoke; then
+              created=true
+              break
+            fi
+            rm -rf "${app_dir}"
+            echo "Waiting for npm package installation to propagate (${attempt}/120)..."
+            sleep 5
+          done
+          if [[ "${created}" != "true" ]]; then
+            echo "onramp-js@${PACKAGE_VERSION} could not scaffold an app after 10 minutes." >&2
+            exit 1
+          fi
           cd "${app_dir}"
           npm test
           npm run typecheck
