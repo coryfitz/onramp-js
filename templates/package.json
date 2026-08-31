@@ -17,9 +17,6 @@
     "test": "node scripts/build-routes.js && jest --runInBand"
   },
   "dependencies": {
-    "@react-navigation/bottom-tabs": "^6.6.1",
-    "@react-navigation/native": "^6.1.18",
-    "@react-navigation/native-stack": "^6.9.26",
     "@stylexjs/stylex": "^0.14.1",
     "react": "19.2.3",
     "react-dom": "19.2.3",

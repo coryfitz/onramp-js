@@ -11,6 +11,9 @@ test('generated projects use the audited Node and web development toolchain', ()
   assert.equal(templatePackageJson.engines.node, '>=22.15.0 <23');
   assert.equal(templatePackageJson.devDependencies.webpack, '^5.101.0');
   assert.equal(templatePackageJson.devDependencies['webpack-dev-server'], '^6.0.0');
+  assert.equal(templatePackageJson.dependencies['@react-navigation/native'], undefined);
+  assert.equal(templatePackageJson.dependencies['@react-navigation/bottom-tabs'], undefined);
+  assert.equal(templatePackageJson.dependencies['@react-navigation/native-stack'], undefined);
   assert.equal(
     fs.readFileSync(path.join(__dirname, '..', 'templates', '.nvmrc'), 'utf8'),
     '22\n'
