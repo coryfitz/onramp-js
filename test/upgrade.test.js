@@ -8,12 +8,16 @@ const packageJson = require('../package.json');
 const {
   FRONTEND_MANIFEST,
   managedFileContents,
+  sha256,
   writeFrontendManifest,
 } = require('../src/project');
 const {
   applyFrontendUpgrade,
+  BROKEN_NATIVE_STYLE_FILE_HASHES,
+  LEGACY_MANAGED_HASHES,
   planFrontendUpgrade,
   printFrontendCheckResult,
+  updatedNativeStyleImports,
   updatedFrontendGitignore,
 } = require('../src/upgrade');
 
@@ -114,6 +118,72 @@ test('does not overwrite customized framework package requirements', t => {
   assert.ok(plan.conflicts.some(conflict => (
     conflict.includes('dependencies.react-native uses 0.82.0-custom')
   )));
+});
+
+test('repairs the generated import that discards native application styles', t => {
+  const outputDir = createProject(t);
+  const appDir = path.join(outputDir, 'app', 'profile');
+  const routePath = path.join(appDir, '[id].tsx');
+  fs.mkdirSync(appDir, { recursive: true });
+  const source = "import * as css from '@stylexjs/stylex';\n"
+    + "import { html } from 'react-strict-dom';\n"
+    + "const styles = css.create({ root: { color: 'red' } });\n";
+  fs.writeFileSync(routePath, source);
+
+  const plan = planFrontendUpgrade(outputDir, {
+    nativeStyleFileHashes: {
+      'app/profile/[id].tsx': sha256(source),
+    },
+  });
+  const routeChange = plan.changes.find(
+    change => change.relativePath === 'app/profile/[id].tsx'
+  );
+
+  assert.ok(routeChange);
+  assert.equal(
+    routeChange.reason,
+    'restore React Strict DOM native style resolution'
+  );
+  assert.match(
+    routeChange.content,
+    /import \{ css, html \} from 'react-strict-dom';/
+  );
+  assert.doesNotMatch(routeChange.content, /@stylexjs\/stylex/);
+});
+
+test('leaves unrelated StyleX imports unchanged during upgrades', () => {
+  const source = "import * as css from '@stylexjs/stylex';\n"
+    + "const styles = css.create({ root: { color: 'red' } });\n";
+
+  assert.equal(updatedNativeStyleImports(source), source);
+});
+
+test('does not rewrite customized application source with the affected imports', t => {
+  const outputDir = createProject(t);
+  const routePath = path.join(outputDir, 'app', 'index.tsx');
+  const source = "import * as css from '@stylexjs/stylex';\n"
+    + "import { html } from 'react-strict-dom';\n"
+    + "const styles = css.create({ root: { color: 'red' } });\n";
+  fs.mkdirSync(path.dirname(routePath), { recursive: true });
+  fs.writeFileSync(routePath, source);
+
+  const plan = planFrontendUpgrade(outputDir);
+
+  assert.equal(
+    plan.changes.some(change => change.relativePath === 'app/index.tsx'),
+    false
+  );
+  assert.equal(fs.readFileSync(routePath, 'utf8'), source);
+});
+
+test('recognizes the affected generated starter and legacy registry hashes', () => {
+  assert.deepEqual(BROKEN_NATIVE_STYLE_FILE_HASHES, {
+    'app/index.tsx': 'c98a2686fb00ea142dad9a95f7e3eaf0a3e9a834a223739c484684bc5d50a954',
+    'app/profile/[id].tsx': 'dc563718506cc5a053acf5f4cc87134fcba9dd0b3bd46653e72c9eac9d62316f',
+  });
+  assert.ok(LEGACY_MANAGED_HASHES['src/navigation/RouteRegistry.tsx'].includes(
+    'aee7d6f66e898cf5332140e6f631a70b2322a72f5c54d829e9acbf0182364de2'
+  ));
 });
 
 test('preserves a managed frontend customization when its base is unchanged', t => {

@@ -51,6 +51,7 @@ const LEGACY_MANAGED_HASHES = {
   ],
   'src/navigation/RouteRegistry.tsx': [
     'cd47104819f460467921ee6a2bc59dff3727b9223a36169499affc734226b897',
+    'aee7d6f66e898cf5332140e6f631a70b2322a72f5c54d829e9acbf0182364de2',
   ],
   'tsconfig.json': [
     'ed4f7b9cefd9a46c0be9e0a9b80aae60f84eabbf248af016cfc229a8e2041ee1',
@@ -112,6 +113,20 @@ const LEGACY_MANAGED_PACKAGE_SPECS = {
 };
 
 const LEGACY_NODE_ENGINES = ['>=20.19.4 <21'];
+const BROKEN_NATIVE_STYLE_IMPORT = (
+  /import \* as css from '@stylexjs\/stylex';\r?\nimport \{ html \} from 'react-strict-dom';/g
+);
+const BROKEN_NATIVE_STYLE_FILE_HASHES = {
+  'app/index.tsx': 'c98a2686fb00ea142dad9a95f7e3eaf0a3e9a834a223739c484684bc5d50a954',
+  'app/profile/[id].tsx': 'dc563718506cc5a053acf5f4cc87134fcba9dd0b3bd46653e72c9eac9d62316f',
+};
+
+function updatedNativeStyleImports(content) {
+  return content.replace(
+    BROKEN_NATIVE_STYLE_IMPORT,
+    "import { css, html } from 'react-strict-dom';"
+  );
+}
 
 function migrateManagedPackageDependencies(targetPackage, conflicts) {
   for (const [section, dependencies] of Object.entries(MANAGED_PACKAGE_DEPENDENCIES)) {
@@ -177,7 +192,10 @@ function updatedFrontendGitignore(content) {
   return `${updated}\n# OnRamp generated and recoverable output\n${missing.join('\n')}\n`;
 }
 
-function planFrontendUpgrade(outputDir) {
+function planFrontendUpgrade(
+  outputDir,
+  { nativeStyleFileHashes = BROKEN_NATIVE_STYLE_FILE_HASHES } = {},
+) {
   const root = path.resolve(outputDir);
   const packagePath = path.join(root, 'package.json');
   if (!fs.existsSync(packagePath)) {
@@ -225,6 +243,21 @@ function planFrontendUpgrade(outputDir) {
       conflicts.push(
         `${relativePath} was modified after generation; OnRamp will not overwrite it.`
       );
+    }
+  }
+
+  for (const [relativePath, brokenHash] of Object.entries(nativeStyleFileHashes)) {
+    const filePath = path.join(root, relativePath);
+    if (!fs.existsSync(filePath)) continue;
+    const currentContent = fs.readFileSync(filePath, 'utf8');
+    if (sha256(currentContent) !== brokenHash) continue;
+    const targetContent = updatedNativeStyleImports(currentContent);
+    if (targetContent !== currentContent) {
+      changes.push({
+        relativePath,
+        content: targetContent,
+        reason: 'restore React Strict DOM native style resolution',
+      });
     }
   }
 
@@ -463,6 +496,7 @@ function upgradeFrontend(
 
 module.exports = {
   applyFrontendUpgrade,
+  BROKEN_NATIVE_STYLE_FILE_HASHES,
   FRONTEND_MIGRATIONS,
   frontendMigrationSteps,
   LEGACY_MANAGED_HASHES,
@@ -471,6 +505,7 @@ module.exports = {
   planFrontendUpgrade,
   printFrontendCheckResult,
   printFrontendPlan,
+  updatedNativeStyleImports,
   updatedFrontendGitignore,
   upgradeFrontend,
 };

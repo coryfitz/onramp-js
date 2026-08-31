@@ -2,6 +2,44 @@ function resolveFromProject(request, projectRoot) {
   return require.resolve(request, { paths: [projectRoot] });
 }
 
+function removeCompiledStrictDomCssImport({ types: t }) {
+  return {
+    name: 'onramp-remove-compiled-strict-dom-css-import',
+    visitor: {
+      Program: {
+        exit(programPath) {
+          programPath.scope.crawl();
+          for (const statementPath of programPath.get('body')) {
+            if (
+              !statementPath.isImportDeclaration()
+              || statementPath.node.source.value !== 'react-strict-dom'
+            ) {
+              continue;
+            }
+
+            const specifiers = statementPath.node.specifiers.filter(specifier => {
+              if (
+                !t.isImportSpecifier(specifier)
+                || !t.isIdentifier(specifier.imported, { name: 'css' })
+              ) {
+                return true;
+              }
+
+              const binding = programPath.scope.getBinding(specifier.local.name);
+              return binding?.referenced === true;
+            });
+            if (specifiers.length === 0) {
+              statementPath.remove();
+            } else {
+              statementPath.node.specifiers = specifiers;
+            }
+          }
+        },
+      },
+    },
+  };
+}
+
 function createWebBabelOptions(
   projectRoot,
   { typescript = true, resolveModule = resolveFromProject, loadModule = require } = {},
@@ -45,8 +83,13 @@ function createWebBabelOptions(
           },
         },
       ],
+      removeCompiledStrictDomCssImport,
     ],
   };
 }
 
-module.exports = { createWebBabelOptions, resolveFromProject };
+module.exports = {
+  createWebBabelOptions,
+  removeCompiledStrictDomCssImport,
+  resolveFromProject,
+};

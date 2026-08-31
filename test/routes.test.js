@@ -51,8 +51,13 @@ test('the starter app demonstrates home and dynamic file routes', () => {
   assert.doesNotMatch(starter, /window\.location/);
   assert.equal(packageJson.dependencies['@stylexjs/stylex'], '^0.14.1');
   assert.equal(packageJson.devDependencies['@stylexjs/babel-plugin'], '^0.14.1');
-  assert.match(starter, /import \* as css from '@stylexjs\/stylex';/);
-  assert.doesNotMatch(starter, /import \{\s*css,\s*html\s*\} from 'react-strict-dom'/);
+  assert.equal(
+    (starter.match(/import \{\s*css,\s*html\s*\} from 'react-strict-dom';/g) || []).length,
+    3
+  );
+  assert.doesNotMatch(starter, /import \* as css from '@stylexjs\/stylex';/);
+  assert.match(nativeSmoke, /backgroundColor: '#F4F7FC'/);
+  assert.match(nativeSmoke, /padding: expectedPadding/);
   assert.doesNotMatch(starter, /minHeight: '100%'/);
   assert.doesNotMatch(starter, /maxWidth: '100%'/);
   assert.doesNotMatch(starter, /lineHeight: 1\./);
