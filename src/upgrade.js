@@ -2,6 +2,7 @@ const fs = require('fs');
 const path = require('path');
 
 const packageJson = require('../package.json');
+const templatePackageJson = require('../templates/package.json');
 const {
   atomicWrite,
   buildFrontendManifest,
@@ -26,6 +27,9 @@ const FRONTEND_GITIGNORE_ENTRIES = [
 ];
 
 const LEGACY_MANAGED_HASHES = {
+  '.nvmrc': [
+    '5378796307535df3ec8d8b15a2e2dc5641419c3d3060cfe32238c0fa973f7aa3',
+  ],
   'babel.config.js': [
     '44d42353b1c8986f910673427f2cabf3e85d7bee374deaf3e3855f47a2c784c9',
   ],
@@ -61,7 +65,92 @@ const LEGACY_MANAGED_HASHES = {
 const FRONTEND_MIGRATIONS = new Map([
   [0, 'adopt package-owned tooling and versioned frontend metadata'],
   [1, 'isolate generated route modules by platform'],
+  [2, 'upgrade the secure Node, React Native, Metro, and webpack toolchain'],
 ]);
+
+const MANAGED_PACKAGE_DEPENDENCIES = {
+  dependencies: [
+    'react',
+    'react-dom',
+    'react-native',
+  ],
+  devDependencies: [
+    '@react-native-community/cli',
+    '@react-native-community/cli-platform-android',
+    '@react-native-community/cli-platform-ios',
+    '@react-native/babel-preset',
+    '@react-native/jest-preset',
+    '@react-native/metro-config',
+    '@types/react',
+    '@types/react-dom',
+    'react-test-renderer',
+    'typescript',
+    'webpack',
+    'webpack-dev-server',
+  ],
+};
+
+const LEGACY_MANAGED_PACKAGE_SPECS = {
+  dependencies: {
+    react: ['19.0.0', '19.1.0'],
+    'react-dom': ['19.0.0', '19.1.0'],
+    'react-native': ['0.81.0', '0.81.1'],
+  },
+  devDependencies: {
+    '@react-native-community/cli': ['^20.0.0', '^20.0.2', '20.1.0'],
+    '@react-native-community/cli-platform-android': ['^20.0.0', '^20.0.2', '20.1.0'],
+    '@react-native-community/cli-platform-ios': ['^20.0.0', '^20.0.2', '20.1.0'],
+    '@react-native/babel-preset': ['0.81.0', '0.81.1'],
+    '@react-native/metro-config': ['0.81.0', '0.81.1'],
+    '@types/react': ['^19.0.0', '^19.1.0'],
+    '@types/react-dom': ['^19.0.0', '^19.1.0'],
+    'react-test-renderer': ['19.0.0', '19.1.0'],
+    typescript: ['^5.6.2'],
+    webpack: ['^5.88.0'],
+    'webpack-dev-server': ['^4.15.0'],
+  },
+};
+
+const LEGACY_NODE_ENGINES = ['>=20.19.4 <21'];
+
+function migrateManagedPackageDependencies(targetPackage, conflicts) {
+  for (const [section, dependencies] of Object.entries(MANAGED_PACKAGE_DEPENDENCIES)) {
+    targetPackage[section] = targetPackage[section] || {};
+    for (const dependency of dependencies) {
+      const targetSpec = templatePackageJson[section][dependency];
+      const currentSpec = targetPackage[section][dependency];
+      const knownLegacySpecs = LEGACY_MANAGED_PACKAGE_SPECS[section]?.[dependency] || [];
+      if (
+        currentSpec === undefined
+        || currentSpec === targetSpec
+        || knownLegacySpecs.includes(currentSpec)
+      ) {
+        targetPackage[section][dependency] = targetSpec;
+        continue;
+      }
+      conflicts.push(
+        `package.json ${section}.${dependency} uses ${currentSpec}; `
+        + `OnRamp will not replace the customized requirement with ${targetSpec}.`
+      );
+    }
+  }
+
+  targetPackage.engines = targetPackage.engines || {};
+  const targetNodeEngine = templatePackageJson.engines.node;
+  const currentNodeEngine = targetPackage.engines.node;
+  if (
+    currentNodeEngine === undefined
+    || currentNodeEngine === targetNodeEngine
+    || LEGACY_NODE_ENGINES.includes(currentNodeEngine)
+  ) {
+    targetPackage.engines.node = targetNodeEngine;
+  } else {
+    conflicts.push(
+      `package.json engines.node uses ${currentNodeEngine}; `
+      + `OnRamp will not replace the customized requirement with ${targetNodeEngine}.`
+    );
+  }
+}
 
 function frontendMigrationSteps(fromSchema, toSchema) {
   const steps = [];
@@ -154,6 +243,7 @@ function planFrontendUpgrade(outputDir) {
 
   const currentPackage = JSON.parse(fs.readFileSync(packagePath, 'utf8'));
   const targetPackage = JSON.parse(JSON.stringify(currentPackage));
+  migrateManagedPackageDependencies(targetPackage, conflicts);
   targetPackage.scripts = targetPackage.scripts || {};
   if (
     !targetPackage.scripts.typecheck
@@ -169,7 +259,12 @@ function planFrontendUpgrade(outputDir) {
     );
   }
   targetPackage.jest = targetPackage.jest || {};
-  targetPackage.jest.preset = targetPackage.jest.preset || 'react-native';
+  if (
+    targetPackage.jest.preset === undefined
+    || targetPackage.jest.preset === 'react-native'
+  ) {
+    targetPackage.jest.preset = '@react-native/jest-preset';
+  }
   targetPackage.jest.modulePathIgnorePatterns = (
     targetPackage.jest.modulePathIgnorePatterns || ['/.onramp/backups/']
   );
@@ -371,6 +466,8 @@ module.exports = {
   FRONTEND_MIGRATIONS,
   frontendMigrationSteps,
   LEGACY_MANAGED_HASHES,
+  MANAGED_PACKAGE_DEPENDENCIES,
+  migrateManagedPackageDependencies,
   planFrontendUpgrade,
   printFrontendCheckResult,
   printFrontendPlan,

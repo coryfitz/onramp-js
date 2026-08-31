@@ -7,13 +7,20 @@ const {
   syncNativeProjects,
 } = require('./native-config');
 const { run } = require('./process');
+const templatePackageJson = require('../templates/package.json');
 
-const REACT_NATIVE_VERSION = '0.81.1';
-const REACT_NATIVE_CLI_VERSION = '20.0.2';
+const REACT_NATIVE_VERSION = templatePackageJson.dependencies['react-native'];
+const REACT_NATIVE_CLI_VERSION = (
+  templatePackageJson.devDependencies['@react-native-community/cli']
+);
 const CLI_DEPENDENCIES = {
-  '@react-native-community/cli': '^20.0.2',
-  '@react-native-community/cli-platform-ios': '^20.0.2',
-  '@react-native-community/cli-platform-android': '^20.0.2',
+  '@react-native-community/cli': REACT_NATIVE_CLI_VERSION,
+  '@react-native-community/cli-platform-ios': (
+    templatePackageJson.devDependencies['@react-native-community/cli-platform-ios']
+  ),
+  '@react-native-community/cli-platform-android': (
+    templatePackageJson.devDependencies['@react-native-community/cli-platform-android']
+  ),
 };
 
 function writeJson(filePath, value) {

@@ -288,10 +288,10 @@ source-repository resolution behavior and is not equivalent. Run the generated
 app's tests, typecheck, and production web build. After npm publishes, repeat
 that scaffold check using the exact public npm version.
 
-Generated-app checks run on the supported Node 20 line. The GitHub publication
+Generated-app checks run on the supported Node 22 line. The GitHub publication
 step switches to Node 24 because npm trusted publishing requires Node 22.14 or
 newer and npm 11.5.1 or newer; do not use that publishing runtime as a
-substitute for testing the package's declared Node 20 application runtime.
+substitute for testing the package's declared Node 22 application runtime.
 
 After the Python release pins the verified npm version, create another clean
 project with the exact public PyPI version and repeat the generated-project

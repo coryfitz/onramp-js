@@ -196,7 +196,7 @@ function prepareNativeConfig(outputDir, requestedName, environment = null) {
   appJson.name = name;
   appJson.displayName = displayName;
   writeJson(appJsonPath, appJson);
-  fs.writeFileSync(path.join(outputDir, '.nvmrc'), '20\n', 'utf8');
+  fs.writeFileSync(path.join(outputDir, '.nvmrc'), '22\n', 'utf8');
 
   const profile = environment
     ? resolveEnvironmentProfile(outputDir, environment, 'ios')

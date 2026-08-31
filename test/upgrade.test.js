@@ -41,11 +41,79 @@ test('plans a legacy frontend migration without overwriting known files', t => {
   const plan = planFrontendUpgrade(outputDir);
 
   assert.equal(plan.fromSchema, 0);
-  assert.equal(plan.toSchema, 2);
-  assert.equal(plan.migrations.length, 2);
+  assert.equal(plan.toSchema, 3);
+  assert.equal(plan.migrations.length, 3);
   assert.deepEqual(plan.conflicts, []);
   assert.ok(plan.changes.some(change => change.relativePath === 'babel.config.js'));
   assert.ok(plan.changes.some(change => change.relativePath === 'package.json'));
+});
+
+test('migrates framework-owned package and Node requirements', t => {
+  const outputDir = createProject(t);
+  const legacyPackage = {
+    name: 'example',
+    dependencies: {
+      react: '19.1.0',
+      'react-dom': '19.1.0',
+      'react-native': '0.81.1',
+    },
+    devDependencies: {
+      '@react-native-community/cli': '^20.0.2',
+      '@react-native-community/cli-platform-android': '^20.0.2',
+      '@react-native-community/cli-platform-ios': '^20.0.2',
+      '@react-native/babel-preset': '0.81.1',
+      '@react-native/metro-config': '0.81.1',
+      '@types/react': '^19.1.0',
+      '@types/react-dom': '^19.1.0',
+      'react-test-renderer': '19.1.0',
+      typescript: '^5.6.2',
+      webpack: '^5.88.0',
+      'webpack-dev-server': '^4.15.0',
+    },
+    engines: { node: '>=20.19.4 <21' },
+    jest: { preset: 'react-native' },
+  };
+  fs.writeFileSync(
+    path.join(outputDir, 'package.json'),
+    `${JSON.stringify(legacyPackage, null, 2)}\n`
+  );
+  fs.writeFileSync(path.join(outputDir, '.nvmrc'), '20\n');
+
+  const plan = planFrontendUpgrade(outputDir);
+
+  assert.deepEqual(plan.conflicts, []);
+  const packageChange = plan.changes.find(change => change.relativePath === 'package.json');
+  const upgraded = JSON.parse(packageChange.content);
+  assert.equal(upgraded.dependencies['react-native'], '0.86.3');
+  assert.equal(upgraded.dependencies.react, '19.2.3');
+  assert.equal(upgraded.devDependencies['@react-native/metro-config'], '0.86.3');
+  assert.equal(upgraded.devDependencies['@react-native/jest-preset'], '0.86.3');
+  assert.equal(upgraded.devDependencies.webpack, '^5.101.0');
+  assert.equal(upgraded.devDependencies['webpack-dev-server'], '^6.0.0');
+  assert.equal(upgraded.engines.node, '>=22.15.0 <23');
+  assert.equal(upgraded.jest.preset, '@react-native/jest-preset');
+  assert.equal(
+    plan.changes.find(change => change.relativePath === '.nvmrc').content,
+    '22\n'
+  );
+});
+
+test('does not overwrite customized framework package requirements', t => {
+  const outputDir = createProject(t);
+  const projectPackage = JSON.parse(
+    fs.readFileSync(path.join(outputDir, 'package.json'), 'utf8')
+  );
+  projectPackage.dependencies = { 'react-native': '0.82.0-custom' };
+  fs.writeFileSync(
+    path.join(outputDir, 'package.json'),
+    `${JSON.stringify(projectPackage, null, 2)}\n`
+  );
+
+  const plan = planFrontendUpgrade(outputDir);
+
+  assert.ok(plan.conflicts.some(conflict => (
+    conflict.includes('dependencies.react-native uses 0.82.0-custom')
+  )));
 });
 
 test('preserves a managed frontend customization when its base is unchanged', t => {

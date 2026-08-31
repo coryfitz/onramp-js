@@ -25,7 +25,7 @@ jobs:
 
       - uses: actions/setup-node@v6
         with:
-          node-version: "20"
+          node-version: "22"
           registry-url: "https://registry.npmjs.org"
           package-manager-cache: false
 
@@ -70,7 +70,7 @@ jobs:
 
       - uses: actions/setup-node@v6
         with:
-          node-version: "20"
+          node-version: "22"
           registry-url: "https://registry.npmjs.org"
           package-manager-cache: false
 
@@ -87,6 +87,7 @@ jobs:
           ONRAMP_JS_PACKAGE_SPEC="${package_tarball}" \
             node "${GITHUB_WORKSPACE}/bin/onramp-js.js" create onramp-js-local-smoke
           cd "${app_dir}"
+          npm audit
           npm test
           npm run typecheck
           npm run build:web -- --fail-on-warnings
@@ -113,7 +114,7 @@ jobs:
 
       - uses: actions/setup-node@v6
         with:
-          node-version: "20"
+          node-version: "22"
           registry-url: "https://registry.npmjs.org"
           package-manager-cache: false
 
@@ -157,6 +158,7 @@ jobs:
             exit 1
           fi
           cd "${app_dir}"
+          npm audit
           npm test
           npm run typecheck
           npm run build:web -- --fail-on-warnings

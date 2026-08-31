@@ -27,12 +27,12 @@ function nodeVersionTuple() {
 function doctorWeb() {
   const [major, minor, patch] = nodeVersionTuple();
   const minimumSatisfied = (
-    major === 20
-    && (minor > 19 || (minor === 19 && patch >= 4))
+    major === 22
+    && (minor > 15 || (minor === 15 && patch >= 0))
   );
   if (!minimumSatisfied) {
     throw new Error(
-      `Node.js 20.19.4 or newer on the Node 20 line is required; found ${process.versions.node}.`
+      `Node.js 22.15.0 or newer on the Node 22 line is required; found ${process.versions.node}.`
     );
   }
   if (!findExecutable('npm')) {
