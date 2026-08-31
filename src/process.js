@@ -6,6 +6,22 @@ function isPythonWrapper(env = process.env) {
   return env.ONRAMP_PYTHON_WRAPPER === '1';
 }
 
+function childEnvironment(env = process.env) {
+  const childEnv = { ...env };
+
+  // `npm exec --package ...` exposes its own package selection as an npm
+  // configuration variable. If it reaches a nested `npx` invocation, npm
+  // treats that inherited value as another --package argument and attempts to
+  // execute the positional package name instead of its binary.
+  for (const key of Object.keys(childEnv)) {
+    if (key.toLowerCase() === 'npm_config_package') {
+      delete childEnv[key];
+    }
+  }
+
+  return childEnv;
+}
+
 function run(command, args, cwd, env = process.env, options = {}) {
   if (!isPythonWrapper(env)) {
     console.log(`Running: ${command} ${args.join(' ')}`);
@@ -14,7 +30,7 @@ function run(command, args, cwd, env = process.env, options = {}) {
   const inheritInput = options.inheritInput !== false;
   const result = spawnSync(command, args, {
     cwd,
-    env,
+    env: childEnvironment(env),
     shell: false,
     encoding: quiet ? 'utf8' : undefined,
     stdio: quiet
@@ -41,7 +57,7 @@ function run(command, args, cwd, env = process.env, options = {}) {
 function capture(command, args, options = {}) {
   const result = spawnSync(command, args, {
     cwd: options.cwd,
-    env: options.env || process.env,
+    env: childEnvironment(options.env || process.env),
     shell: false,
     encoding: 'utf8',
     input: options.input,
@@ -78,7 +94,7 @@ function runAsync(command, args, cwd, env = process.env, options = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, {
       cwd,
-      env,
+      env: childEnvironment(env),
       shell: false,
       stdio: quiet
         ? ['ignore', 'pipe', 'pipe']
@@ -177,6 +193,7 @@ function prependPath(env, ...directories) {
 
 module.exports = {
   capture,
+  childEnvironment,
   findExecutable,
   isPythonWrapper,
   prependPath,
