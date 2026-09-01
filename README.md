@@ -267,6 +267,11 @@ server and copied to the root of `dist/` by production builds.
 Generated routes use typed `css.create` styles rather than untyped inline
 objects. Native layout elements cannot contain bare text nodes, so text inside
 an `html.div` belongs in an `html.span` or another text-bearing element.
+Apply flexbox alignment to an `html.div`, not an `html.span`: spans become
+native text, where `alignItems` and `justifyContent` do not center the glyph.
+Do not rely on text styles inheriting through an `html.div`; native `View`
+boundaries do not inherit typography, so style the nested text element
+explicitly.
 Unitless CSS line-height ratios must be strings (`'1.5'`); React Native treats
 numeric line heights as absolute points. Percentage dimensions require
 `boxSizing: 'border-box'`, though flex sizing is preferred when possible.

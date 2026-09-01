@@ -79,6 +79,15 @@ interpolated values inside layout elements with `html.span`:
 </html.div>
 ```
 
+Flexbox alignment belongs on a layout element such as `html.div`, not on
+`html.span`. A span becomes native text on iOS and Android, where
+`alignItems` and `justifyContent` do not center that text's own glyph. For a
+centered badge, put those properties on an `html.div` and render its label in a
+nested `html.span`.
+Do not rely on text styles inheriting through an `html.div`; native `View`
+boundaries do not inherit typography, so style the nested text element
+explicitly.
+
 Use strings for unitless CSS line-height ratios, such as
 `lineHeight: '1.5'`. A numeric value such as `1.5` is interpreted by React
 Native as an absolute 1.5-point line height. Percentage dimensions require

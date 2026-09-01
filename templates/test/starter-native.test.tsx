@@ -70,6 +70,34 @@ function expectStarterScreenStyle(
   ]));
 }
 
+function expectCenteredProfileInitial(
+  tree: TestRenderer.ReactTestRenderer,
+  expectedInitial: string,
+) {
+  const initialTextNodes = tree.root.findAll(instance => {
+    const style = mergedStyle(instance.props.style);
+    const parentStyle = mergedStyle(instance.parent?.props.style);
+    return instance.props.children === expectedInitial
+      && style.color === '#174A96'
+      && style.fontWeight === '900'
+      && parentStyle.width === 34
+      && parentStyle.height === 34
+      && parentStyle.backgroundColor === '#E7EFFB'
+      && parentStyle.alignItems === 'center'
+      && parentStyle.justifyContent === 'center';
+  });
+
+  expect(initialTextNodes).toHaveLength(1);
+  const badge = initialTextNodes[0].parent;
+  expect(badge).not.toBeNull();
+  expect(mergedStyle(badge?.props.style)).toEqual(expect.objectContaining({
+    width: 34,
+    height: 34,
+    alignItems: 'center',
+    justifyContent: 'center',
+  }));
+}
+
 describe.each([false, true])('starter native layout (compact=%s)', compact => {
   test('renders both starter routes without native text or style warnings', () => {
     mockCompactLayout = compact;
@@ -91,6 +119,7 @@ describe.each([false, true])('starter native layout (compact=%s)', compact => {
       trees.push(profile);
       expectStarterScreenStyle(home, compact ? 16 : 20);
       expectStarterScreenStyle(profile, compact ? 16 : 20);
+      expectCenteredProfileInitial(profile, 'A');
     } finally {
       trees.forEach(unmount);
       errorSpy.mockRestore();

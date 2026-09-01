@@ -108,10 +108,12 @@ const styles = css.create({
     height: 34,
     borderRadius: 11,
     backgroundColor: palette.mint,
-    color: palette.green,
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  initialText: {
+    color: palette.green,
     fontSize: 16,
     fontWeight: '900',
   },
@@ -277,7 +279,9 @@ export default function ProfilePage({ id }: { id?: string }) {
           <html.div style={[styles.featureRow, isCompact && styles.columnCompact]}>
             <html.div style={[styles.hero, isCompact && styles.heroCompact]}>
               <html.div style={styles.routeLabel}>
-                <html.span style={styles.initial}>{name.charAt(0)}</html.span>
+                <html.div style={styles.initial}>
+                  <html.span style={styles.initialText}>{name.charAt(0)}</html.span>
+                </html.div>
                 <html.span>Dynamic file route</html.span>
               </html.div>
               <html.h1 style={[styles.heroTitle, isCompact && styles.heroTitleCompact]}>

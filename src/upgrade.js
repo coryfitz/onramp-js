@@ -120,6 +120,12 @@ const BROKEN_NATIVE_STYLE_FILE_HASHES = {
   'app/index.tsx': 'c98a2686fb00ea142dad9a95f7e3eaf0a3e9a834a223739c484684bc5d50a954',
   'app/profile/[id].tsx': 'dc563718506cc5a053acf5f4cc87134fcba9dd0b3bd46653e72c9eac9d62316f',
 };
+const MISALIGNED_NATIVE_BADGE_FILE_HASHES = {
+  'app/profile/[id].tsx': [
+    '8aebcdb9165962a816fc6cd57512d184b40ee5b7b26de33959a878a954f5e4c4',
+    'dc563718506cc5a053acf5f4cc87134fcba9dd0b3bd46653e72c9eac9d62316f',
+  ],
+};
 
 function updatedNativeStyleImports(content) {
   return content.replace(
@@ -194,7 +200,10 @@ function updatedFrontendGitignore(content) {
 
 function planFrontendUpgrade(
   outputDir,
-  { nativeStyleFileHashes = BROKEN_NATIVE_STYLE_FILE_HASHES } = {},
+  {
+    nativeStyleFileHashes = BROKEN_NATIVE_STYLE_FILE_HASHES,
+    nativeBadgeFileHashes = MISALIGNED_NATIVE_BADGE_FILE_HASHES,
+  } = {},
 ) {
   const root = path.resolve(outputDir);
   const packagePath = path.join(root, 'package.json');
@@ -259,6 +268,28 @@ function planFrontendUpgrade(
         reason: 'restore React Strict DOM native style resolution',
       });
     }
+  }
+
+  for (const [relativePath, configuredHashes] of Object.entries(nativeBadgeFileHashes)) {
+    const filePath = path.join(root, relativePath);
+    if (!fs.existsSync(filePath)) continue;
+    const currentContent = fs.readFileSync(filePath, 'utf8');
+    const brokenHashes = Array.isArray(configuredHashes)
+      ? configuredHashes
+      : [configuredHashes];
+    if (!brokenHashes.includes(sha256(currentContent))) continue;
+    const targetContent = fs.readFileSync(
+      path.resolve(__dirname, '..', 'templates', relativePath),
+      'utf8'
+    );
+    const change = {
+      relativePath,
+      content: targetContent,
+      reason: 'center the generated profile initial on native platforms',
+    };
+    const existingIndex = changes.findIndex(item => item.relativePath === relativePath);
+    if (existingIndex === -1) changes.push(change);
+    else changes[existingIndex] = change;
   }
 
   const gitignorePath = path.join(root, '.gitignore');
@@ -501,6 +532,7 @@ module.exports = {
   frontendMigrationSteps,
   LEGACY_MANAGED_HASHES,
   MANAGED_PACKAGE_DEPENDENCIES,
+  MISALIGNED_NATIVE_BADGE_FILE_HASHES,
   migrateManagedPackageDependencies,
   planFrontendUpgrade,
   printFrontendCheckResult,

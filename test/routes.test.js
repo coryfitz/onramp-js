@@ -45,6 +45,11 @@ test('the starter app demonstrates home and dynamic file routes', () => {
   assert.match(profile, /app\/profile\/\[id\]\.tsx/);
   assert.match(profile, /<html\.span>Dynamic route · \/profile\/\{profileId\}<\/html\.span>/);
   assert.match(profile, /<html\.span>Dynamic file route<\/html\.span>/);
+  assert.match(
+    profile,
+    /<html\.div style=\{styles\.initial\}>\s*<html\.span style=\{styles\.initialText\}>/,
+  );
+  assert.doesNotMatch(profile, /<html\.span style=\{styles\.initial\}>/);
   assert.match(profile, /<html\.span>\/profile\/\{profile\.id\}<\/html\.span>/);
   assert.match(profile, /useCompactLayout\(\)/);
   assert.equal(fs.existsSync(path.join(templates, 'about.tsx')), false);

@@ -15,6 +15,7 @@ const {
   applyFrontendUpgrade,
   BROKEN_NATIVE_STYLE_FILE_HASHES,
   LEGACY_MANAGED_HASHES,
+  MISALIGNED_NATIVE_BADGE_FILE_HASHES,
   planFrontendUpgrade,
   printFrontendCheckResult,
   updatedNativeStyleImports,
@@ -151,6 +152,80 @@ test('repairs the generated import that discards native application styles', t =
   assert.doesNotMatch(routeChange.content, /@stylexjs\/stylex/);
 });
 
+test('centers the generated profile initial when upgrading an untouched starter', t => {
+  const outputDir = createProject(t);
+  const routePath = path.join(outputDir, 'app', 'profile', '[id].tsx');
+  const brokenSource = '// untouched starter with the native text badge\n';
+  const fixedSource = fs.readFileSync(
+    path.join(__dirname, '..', 'templates', 'app', 'profile', '[id].tsx'),
+    'utf8'
+  );
+  fs.mkdirSync(path.dirname(routePath), { recursive: true });
+  fs.writeFileSync(routePath, brokenSource);
+
+  const plan = planFrontendUpgrade(outputDir, {
+    nativeStyleFileHashes: {},
+    nativeBadgeFileHashes: {
+      'app/profile/[id].tsx': sha256(brokenSource),
+    },
+  });
+  const routeChange = plan.changes.find(
+    change => change.relativePath === 'app/profile/[id].tsx'
+  );
+
+  assert.ok(routeChange);
+  assert.equal(
+    routeChange.reason,
+    'center the generated profile initial on native platforms'
+  );
+  assert.equal(routeChange.content, fixedSource);
+});
+
+test('repairs an older generated profile import and badge in one upgrade', t => {
+  const outputDir = createProject(t);
+  const routePath = path.join(outputDir, 'app', 'profile', '[id].tsx');
+  const brokenSource = "import * as css from '@stylexjs/stylex';\n"
+    + "import { html } from 'react-strict-dom';\n";
+  const brokenHash = sha256(brokenSource);
+  fs.mkdirSync(path.dirname(routePath), { recursive: true });
+  fs.writeFileSync(routePath, brokenSource);
+
+  const plan = planFrontendUpgrade(outputDir, {
+    nativeStyleFileHashes: { 'app/profile/[id].tsx': brokenHash },
+    nativeBadgeFileHashes: { 'app/profile/[id].tsx': [brokenHash] },
+  });
+  const routeChanges = plan.changes.filter(
+    change => change.relativePath === 'app/profile/[id].tsx'
+  );
+
+  assert.equal(routeChanges.length, 1);
+  assert.equal(
+    routeChanges[0].reason,
+    'center the generated profile initial on native platforms'
+  );
+  assert.equal(
+    routeChanges[0].content,
+    fs.readFileSync(
+      path.join(__dirname, '..', 'templates', 'app', 'profile', '[id].tsx'),
+      'utf8'
+    )
+  );
+});
+
+test('does not replace a customized profile route while repairing native badge layout', t => {
+  const outputDir = createProject(t);
+  const routePath = path.join(outputDir, 'app', 'profile', '[id].tsx');
+  fs.mkdirSync(path.dirname(routePath), { recursive: true });
+  fs.writeFileSync(routePath, '// customized profile route\n');
+
+  const plan = planFrontendUpgrade(outputDir);
+
+  assert.equal(
+    plan.changes.some(change => change.relativePath === 'app/profile/[id].tsx'),
+    false
+  );
+});
+
 test('leaves unrelated StyleX imports unchanged during upgrades', () => {
   const source = "import * as css from '@stylexjs/stylex';\n"
     + "const styles = css.create({ root: { color: 'red' } });\n";
@@ -184,6 +259,12 @@ test('recognizes the affected generated starter and legacy registry hashes', () 
   assert.ok(LEGACY_MANAGED_HASHES['src/navigation/RouteRegistry.tsx'].includes(
     'aee7d6f66e898cf5332140e6f631a70b2322a72f5c54d829e9acbf0182364de2'
   ));
+  assert.deepEqual(MISALIGNED_NATIVE_BADGE_FILE_HASHES, {
+    'app/profile/[id].tsx': [
+      '8aebcdb9165962a816fc6cd57512d184b40ee5b7b26de33959a878a954f5e4c4',
+      'dc563718506cc5a053acf5f4cc87134fcba9dd0b3bd46653e72c9eac9d62316f',
+    ],
+  });
 });
 
 test('preserves a managed frontend customization when its base is unchanged', t => {
