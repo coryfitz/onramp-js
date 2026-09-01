@@ -126,7 +126,17 @@ Frontend schema and managed tooling hashes are stored in
 - JDK 17; OnRamp can offer to install the Android emulator SDK components
 
 `onramp-js run android` checks Google's stable package list and asks before
-installing or upgrading the Emulator, system image, or reusable AVD.
+installing or upgrading the Emulator, system image, or reusable AVD. It also
+identifies the exact selected emulator from its device serial and asks the
+desktop to bring that window to the front when the AVD is reused or booted and
+after the app opens. It verifies final focus where the desktop exposes it.
+On macOS, a mobile run returns Android to the front after iOS has finished
+launching; the iOS Simulator remains open behind it. Windows may decline a
+foreground request, in which case OnRamp asks it to flash the emulator's
+taskbar button.
+Linux uses Sway directly or optional `wmctrl`/`xdotool` X11 tools. Generic pure
+Wayland desktops control focus themselves, so OnRamp may ask you to select the
+emulator from the task switcher even though the app launched successfully.
 
 ### iOS (macOS only)
 

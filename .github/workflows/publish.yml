@@ -57,8 +57,26 @@ jobs:
           );
           NODE
 
+  windows_foreground_check:
+    runs-on: windows-latest
+    timeout-minutes: 5
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          package-manager-cache: false
+
+      - name: Test native Windows emulator targeting
+        run: >-
+          node --test
+          --test-name-pattern="Windows|real host listener"
+          test/android.test.js
+
   publish:
-    needs: check_version
+    needs: [check_version, windows_foreground_check]
     if: needs.check_version.outputs.publish == 'true'
     runs-on: ubuntu-latest
     permissions:
@@ -102,10 +120,11 @@ jobs:
       - run: npm publish
 
   verify:
-    needs: [check_version, publish]
+    needs: [check_version, publish, windows_foreground_check]
     if: >-
       always() &&
       needs.check_version.result == 'success' &&
+      needs.windows_foreground_check.result == 'success' &&
       (needs.publish.result == 'success' || needs.publish.result == 'skipped')
     runs-on: ubuntu-latest
 

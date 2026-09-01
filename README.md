@@ -194,7 +194,18 @@ targets that selected emulator even when another device is online. OnRamp then
 enables host clipboard sharing and cold-starts the selected emulator. The cold
 start bypasses stale Quick Boot state without wiping the virtual device's apps
 or data, while disabling the boot animation to shorten that full boot. Android
-native builds target only the active emulator architecture.
+native builds target only the active emulator architecture. OnRamp maps the
+selected `emulator-PORT` serial to its exact host process and asks the desktop
+to bring that window forward after either reusing or booting it and again after
+the app opens. It verifies final focus where the desktop exposes it. On macOS,
+`run mobile` returns Android to the front after iOS finishes launching. Windows
+restores and activates the exact emulator window; if
+Windows declines the focus request, OnRamp asks Windows to flash its taskbar
+button and explains how to select it. Linux supports Sway directly and
+exact-PID X11 or XWayland activation through `wmctrl`; `xdotool` is an X11
+fallback. A generic
+pure-Wayland compositor cannot portably be forced to focus an existing app, so
+OnRamp reports that limitation without treating the app launch as a failure.
 If the Emulator exits during startup, OnRamp reports its diagnostic
 output immediately; a genuine boot timeout includes the diagnostics collected
 while it was running. Android Emulator 33.1.23 or newer is required for

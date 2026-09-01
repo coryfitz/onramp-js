@@ -186,12 +186,29 @@ test('web development opens the selected local server in a browser', () => {
 test('mobile completes both preflights before starting either Metro', async () => {
   const calls = [];
   const preparedIos = { platform: 'ios' };
-  const preparedAndroid = { platform: 'android' };
-  const androidMetro = { port: 9090, stop: () => calls.push('stop-android') };
+  const preparedAndroid = {
+    environment: { avd: 'Pixel_API_35' },
+    platform: 'android',
+  };
+  const androidMetro = {
+    androidDevice: 'emulator-5554',
+    port: 9090,
+    stop: () => calls.push('stop-android'),
+  };
   const iosMetro = { port: 9091, stop: () => calls.push('stop-ios') };
+  const activateAndroidEmulator = (environment, options) => {
+    calls.push(['activate-android', environment, options]);
+    return true;
+  };
   const result = await runMobile(
-    { name: 'Example', output: '/tmp/example', metroPort: 9090 },
     {
+      name: 'Example',
+      output: '/tmp/example',
+      metroPort: 9090,
+      platform: 'darwin',
+    },
+    {
+      activateAndroidEmulator,
       prepareIosDevelopment: async options => {
         calls.push(['prepare-ios', options]);
         return preparedIos;
@@ -216,19 +233,25 @@ test('mobile completes both preflights before starting either Metro', async () =
     'prepare-ios',
     'launch-android',
     'launch-ios',
+    'activate-android',
   ]);
   assert.equal(calls[0][1].name, 'Example');
   assert.equal(calls[0][1].watchDiagnostics, undefined);
   assert.equal(calls[2][1], preparedAndroid);
   assert.equal(calls[2][2].metroPort, 9090);
+  assert.equal(calls[2][2].activateEmulator, activateAndroidEmulator);
   assert.equal(calls[2][2].metroInteractive, false);
   assert.equal(calls[2][2].metroLabel, 'Android');
+  assert.equal(calls[2][2].platform, 'darwin');
   assert.equal(calls[2][2].rebuild, undefined);
   assert.equal(calls[3][1], preparedIos);
   assert.equal(calls[3][2].metroStartingPort, 9091);
   assert.equal(calls[3][2].metroInteractive, false);
   assert.equal(calls[3][2].metroLabel, 'iOS');
   assert.equal(calls[3][2].rebuild, undefined);
+  assert.equal(calls[4][1], preparedAndroid.environment);
+  assert.equal(calls[4][2].serial, 'emulator-5554');
+  assert.equal(calls[4][2].platform, 'darwin');
   assert.deepEqual(result, { android: androidMetro, ios: iosMetro });
 });
 

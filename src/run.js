@@ -1,10 +1,13 @@
 const fs = require('fs');
 const path = require('path');
 const {
+  activateAndroidEmulator,
   doctorAndroid,
   launchPreparedAndroid,
   prepareAndroidDevelopment,
+  reportAndroidEmulatorActivation,
   runAndroid,
+  safelyActivateAndroidEmulator,
 } = require('./android');
 const {
   doctorIos,
@@ -77,6 +80,7 @@ function runWeb(outputDir, runner = run) {
 }
 
 async function runMobile(options, runners = {
+  activateAndroidEmulator,
   launchPreparedAndroid,
   launchPreparedIos,
   prepareAndroidDevelopment,
@@ -105,9 +109,11 @@ async function runMobile(options, runners = {
   let androidMetro;
   try {
     androidMetro = await runners.launchPreparedAndroid(preparedAndroid, {
+      activateEmulator: runners.activateAndroidEmulator,
       metroPort: options.metroPort,
       metroInteractive: false,
       metroLabel: 'Android',
+      platform: options.platform || process.platform,
       rebuild: options.rebuild,
     });
     if (!androidMetro || !Number.isInteger(androidMetro.port)) {
@@ -125,6 +131,19 @@ async function runMobile(options, runners = {
         rebuild: options.rebuild,
       }
     );
+    if (typeof runners.activateAndroidEmulator === 'function') {
+      const environment = preparedAndroid.environment || preparedAndroid;
+      const platform = options.platform || process.platform;
+      const activation = safelyActivateAndroidEmulator(
+        runners.activateAndroidEmulator,
+        environment,
+        { platform, serial: androidMetro.androidDevice }
+      );
+      reportAndroidEmulatorActivation(activation, environment, {
+        afterIos: true,
+        platform,
+      });
+    }
     return { android: androidMetro, ios: iosMetro };
   } catch (error) {
     if (androidMetro) {

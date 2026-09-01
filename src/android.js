@@ -35,6 +35,188 @@ const EMULATOR_BOOT_TIMEOUT_MS = 180000;
 const EMULATOR_BOOT_POLL_MS = 1000;
 const MIN_SHARP_AVD_DENSITY = 280;
 const MIN_SHARP_AVD_SHORT_SIDE = 720;
+const MACOS_ANDROID_EMULATOR_ACTIVATION_SCRIPT = `
+on run argv
+  set emulatorPid to item 1 of argv as integer
+  tell application "System Events"
+    set emulatorProcesses to every process whose unix id is emulatorPid
+    if (count of emulatorProcesses) is 0 then return "not-found"
+    set emulatorProcess to item 1 of emulatorProcesses
+    set visible of emulatorProcess to true
+    set frontmost of emulatorProcess to true
+    repeat with emulatorWindow in windows of emulatorProcess
+      try
+        set value of attribute "AXMinimized" of emulatorWindow to false
+      end try
+      try
+        perform action "AXRaise" of emulatorWindow
+      end try
+    end repeat
+    delay 0.1
+    if frontmost of emulatorProcess then return "activated"
+    return "refused"
+  end tell
+end run
+`.trim();
+const WINDOWS_ANDROID_EMULATOR_PID_SCRIPT = `
+$ErrorActionPreference = 'Stop'
+$targetPort = __TARGET_PORT__
+try {
+  $ownerProcessIds = @(
+    Get-NetTCPConnection -State Listen -LocalPort $targetPort -ErrorAction Stop |
+      Select-Object -ExpandProperty OwningProcess -Unique |
+      Where-Object { [long]$_ -gt 0 }
+  )
+  if ($ownerProcessIds.Count -eq 1) {
+    Write-Output ('p{0}' -f $ownerProcessIds[0])
+    exit 0
+  }
+} catch {
+}
+exit 1
+`.trim();
+const WINDOWS_ANDROID_EMULATOR_ACTIVATION_SCRIPT = `
+$ErrorActionPreference = 'Stop'
+$targetProcessId = __TARGET_PROCESS_ID__
+$targetPort = __TARGET_PORT__
+try {
+  $windowApiSource = @'
+using System;
+using System.Runtime.InteropServices;
+using System.Text;
+
+public static class OnRampWindowActivation {
+  private const uint GW_OWNER = 4;
+  private const int SW_RESTORE = 9;
+  private const uint FLASHW_TRAY = 2;
+  public delegate bool EnumWindowsProc(IntPtr window, IntPtr parameter);
+
+  [StructLayout(LayoutKind.Sequential)]
+  private struct FLASHWINFO {
+    public uint cbSize;
+    public IntPtr hwnd;
+    public uint dwFlags;
+    public uint uCount;
+    public uint dwTimeout;
+  }
+
+  [DllImport("user32.dll")]
+  private static extern bool EnumWindows(EnumWindowsProc callback, IntPtr parameter);
+  [DllImport("user32.dll")]
+  private static extern uint GetWindowThreadProcessId(IntPtr window, out uint processId);
+  [DllImport("user32.dll")]
+  private static extern IntPtr GetWindow(IntPtr window, uint command);
+  [DllImport("user32.dll")]
+  private static extern int GetWindowTextLength(IntPtr window);
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+  private static extern int GetWindowText(
+    IntPtr window,
+    StringBuilder title,
+    int maximumLength
+  );
+  [DllImport("user32.dll")]
+  private static extern bool IsWindowVisible(IntPtr window);
+  [DllImport("user32.dll")]
+  private static extern bool IsIconic(IntPtr window);
+  [DllImport("user32.dll")]
+  private static extern bool ShowWindowAsync(IntPtr window, int command);
+  [DllImport("user32.dll")]
+  private static extern bool BringWindowToTop(IntPtr window);
+  [DllImport("user32.dll")]
+  private static extern bool SetForegroundWindow(IntPtr window);
+  [DllImport("user32.dll")]
+  private static extern IntPtr GetForegroundWindow();
+  [DllImport("user32.dll")]
+  private static extern bool FlashWindowEx(ref FLASHWINFO info);
+
+  private static bool TitleMatchesPort(string title, uint targetPort) {
+    string marker = ":" + targetPort.ToString();
+    int markerIndex = title.IndexOf(marker, StringComparison.Ordinal);
+    if (markerIndex >= 0) {
+      int afterMarker = markerIndex + marker.Length;
+      if (afterMarker == title.Length || !Char.IsDigit(title[afterMarker])) {
+        return true;
+      }
+    }
+    return title.Contains("(" + targetPort.ToString() + ")");
+  }
+
+  public static IntPtr FindMainWindow(uint targetProcessId, uint targetPort) {
+    IntPtr exact = IntPtr.Zero;
+    IntPtr soleSuitable = IntPtr.Zero;
+    IntPtr soleTopLevel = IntPtr.Zero;
+    int suitableCount = 0;
+    int topLevelCount = 0;
+    EnumWindows(delegate(IntPtr window, IntPtr parameter) {
+      uint ownerProcessId;
+      GetWindowThreadProcessId(window, out ownerProcessId);
+      if (ownerProcessId != targetProcessId || GetWindow(window, GW_OWNER) != IntPtr.Zero) {
+        return true;
+      }
+      topLevelCount += 1;
+      soleTopLevel = window;
+      int titleLength = GetWindowTextLength(window);
+      if (IsWindowVisible(window) && titleLength > 0) {
+        suitableCount += 1;
+        soleSuitable = window;
+        StringBuilder title = new StringBuilder(titleLength + 1);
+        GetWindowText(window, title, title.Capacity);
+        if (TitleMatchesPort(title.ToString(), targetPort)) {
+          exact = window;
+          return false;
+        }
+      }
+      return true;
+    }, IntPtr.Zero);
+    if (exact != IntPtr.Zero) {
+      return exact;
+    }
+    if (suitableCount == 1) {
+      return soleSuitable;
+    }
+    return topLevelCount == 1 ? soleTopLevel : IntPtr.Zero;
+  }
+
+  public static int Activate(uint targetProcessId, uint targetPort) {
+    IntPtr window = FindMainWindow(targetProcessId, targetPort);
+    if (window == IntPtr.Zero) {
+      return 0;
+    }
+    if (IsIconic(window)) {
+      ShowWindowAsync(window, SW_RESTORE);
+    }
+    BringWindowToTop(window);
+    SetForegroundWindow(window);
+    System.Threading.Thread.Sleep(150);
+    if (GetForegroundWindow() == window) {
+      return 1;
+    }
+    FLASHWINFO info = new FLASHWINFO();
+    info.cbSize = (uint)Marshal.SizeOf(info);
+    info.hwnd = window;
+    info.dwFlags = FLASHW_TRAY;
+    info.uCount = 3;
+    info.dwTimeout = 0;
+    FlashWindowEx(ref info);
+    return 2;
+  }
+}
+'@
+  $null = Add-Type -TypeDefinition $windowApiSource -ErrorAction Stop
+  $activationResult = [OnRampWindowActivation]::Activate(
+    [uint32]$targetProcessId,
+    [uint32]$targetPort
+  )
+  switch ($activationResult) {
+    0 { Write-Output 'not-found' }
+    1 { Write-Output 'activated' }
+    2 { Write-Output 'refused-taskbar-requested' }
+    default { Write-Output 'refused' }
+  }
+} catch {
+  Write-Output 'error'
+}
+`.trim();
 
 function parseEmulatorVersion(output) {
   const match = `${output}`.match(
@@ -356,6 +538,869 @@ function runningAndroidAvdSerial(environment, captureFn = capture) {
 
 function androidEmulatorLaunchArgs(avd) {
   return [`@${avd}`, '-no-snapshot-load', '-no-boot-anim'];
+}
+
+function androidEmulatorConsolePort(serial) {
+  const match = String(serial || '').match(/^emulator-(\d+)$/);
+  if (!match) {
+    return null;
+  }
+  const port = Number(match[1]);
+  if (!Number.isInteger(port) || port <= 0 || port > 65535) {
+    return null;
+  }
+  return port;
+}
+
+function uniqueProcessId(processIds) {
+  const unique = [...new Set(
+    processIds.filter(processId => (
+      Number.isInteger(processId) && processId > 0
+    ))
+  )];
+  return unique.length === 1 ? unique[0] : null;
+}
+
+function lsofListeningProcessId(port, env, options = {}) {
+  const platform = options.platform || process.platform;
+  const captureFn = options.captureFn || capture;
+  const findExecutableFn = options.findExecutableFn || findExecutable;
+  const pathExists = options.pathExists || fs.existsSync;
+  const systemLsof = platform === 'darwin' ? '/usr/sbin/lsof' : null;
+  const lsof = systemLsof && pathExists(systemLsof)
+    ? systemLsof
+    : findExecutableFn('lsof', env);
+  if (!lsof) {
+    return null;
+  }
+  const result = captureFn(
+    lsof,
+    ['-nP', `-iTCP:${port}`, '-sTCP:LISTEN', '-Fp'],
+    { env, check: false }
+  );
+  if (result.status !== 0) {
+    return null;
+  }
+  return uniqueProcessId(
+    result.stdout
+      .split(/\r?\n/)
+      .map(line => line.match(/^p([1-9]\d*)$/))
+      .filter(Boolean)
+      .map(pidMatch => Number(pidMatch[1]))
+  );
+}
+
+function windowsPowerShellExecutable(env, options = {}) {
+  const findExecutableFn = options.findExecutableFn || findExecutable;
+  const pathExists = options.pathExists || fs.existsSync;
+  const systemRoot = env.SystemRoot || env.SYSTEMROOT;
+  if (systemRoot) {
+    const bundled = path.win32.join(
+      systemRoot,
+      'System32',
+      'WindowsPowerShell',
+      'v1.0',
+      'powershell.exe'
+    );
+    if (pathExists(bundled)) {
+      return bundled;
+    }
+  }
+  for (const command of ['powershell.exe', 'powershell', 'pwsh.exe', 'pwsh']) {
+    const executable = findExecutableFn(command, env);
+    if (executable) {
+      return executable;
+    }
+  }
+  return null;
+}
+
+function windowsPowerShellArguments(script) {
+  return [
+    '-NoLogo',
+    '-NoProfile',
+    '-NonInteractive',
+    '-ExecutionPolicy',
+    'Bypass',
+    '-Command',
+    script,
+  ];
+}
+
+function windowsListeningProcessId(port, env, options = {}) {
+  const powershell = windowsPowerShellExecutable(env, options);
+  if (!powershell) {
+    return null;
+  }
+  const captureFn = options.captureFn || capture;
+  const script = WINDOWS_ANDROID_EMULATOR_PID_SCRIPT.replace(
+    '__TARGET_PORT__',
+    String(port)
+  );
+  const result = captureFn(
+    powershell,
+    windowsPowerShellArguments(script),
+    { env, check: false }
+  );
+  if (result.status !== 0) {
+    return null;
+  }
+  return uniqueProcessId(
+    result.stdout
+      .split(/\r?\n/)
+      .map(line => line.trim().match(/^p([1-9]\d*)$/))
+      .filter(Boolean)
+      .map(pidMatch => Number(pidMatch[1]))
+  );
+}
+
+function linuxListeningSocketInodes(contents, port) {
+  const inodes = [];
+  for (const line of String(contents).split(/\r?\n/).slice(1)) {
+    const fields = line.trim().split(/\s+/);
+    if (fields.length < 10 || fields[3] !== '0A') {
+      continue;
+    }
+    const address = fields[1].match(/:([0-9A-Fa-f]{4})$/);
+    if (
+      address
+      && Number.parseInt(address[1], 16) === port
+      && /^\d+$/.test(fields[9])
+    ) {
+      inodes.push(fields[9]);
+    }
+  }
+  return [...new Set(inodes)];
+}
+
+function linuxProcListeningProcessId(port, options = {}) {
+  const procRoot = options.procRoot === undefined ? '/proc' : options.procRoot;
+  if (!procRoot) {
+    return null;
+  }
+  const readFileFn = options.readFileFn || fs.readFileSync;
+  const readDirectoryFn = options.readDirectoryFn || fs.readdirSync;
+  const readLinkFn = options.readLinkFn || fs.readlinkSync;
+  const inodes = new Set();
+  for (const networkFile of ['tcp', 'tcp6']) {
+    try {
+      for (const inode of linuxListeningSocketInodes(
+        readFileFn(path.posix.join(procRoot, 'net', networkFile), 'utf8'),
+        port
+      )) {
+        inodes.add(inode);
+      }
+    } catch (_error) {
+      // A minimal or restricted /proc can omit one or both socket tables.
+    }
+  }
+  if (inodes.size === 0) {
+    return null;
+  }
+
+  const processIds = [];
+  let entries;
+  try {
+    entries = readDirectoryFn(procRoot);
+  } catch (_error) {
+    return null;
+  }
+  for (const entry of entries) {
+    if (!/^[1-9]\d*$/.test(entry)) {
+      continue;
+    }
+    let descriptors;
+    try {
+      descriptors = readDirectoryFn(path.posix.join(procRoot, entry, 'fd'));
+    } catch (_error) {
+      continue;
+    }
+    for (const descriptor of descriptors) {
+      try {
+        const target = readLinkFn(
+          path.posix.join(procRoot, entry, 'fd', descriptor)
+        );
+        const socket = String(target).match(/^socket:\[(\d+)\]$/);
+        if (socket && inodes.has(socket[1])) {
+          processIds.push(Number(entry));
+          break;
+        }
+      } catch (_error) {
+        // Processes can exit, close descriptors, or deny access during the scan.
+      }
+    }
+  }
+  return uniqueProcessId(processIds);
+}
+
+function linuxSsListeningProcessId(port, env, options = {}) {
+  const findExecutableFn = options.findExecutableFn || findExecutable;
+  const ss = findExecutableFn('ss', env);
+  if (!ss) {
+    return null;
+  }
+  const captureFn = options.captureFn || capture;
+  const result = captureFn(ss, ['-H', '-ltnp'], { env, check: false });
+  if (result.status !== 0) {
+    return null;
+  }
+  const processIds = [];
+  const endpoint = new RegExp(`:${port}(?:\\s|$)`);
+  for (const line of result.stdout.split(/\r?\n/)) {
+    if (!endpoint.test(line)) {
+      continue;
+    }
+    for (const match of line.matchAll(/pid=(\d+)/g)) {
+      processIds.push(Number(match[1]));
+    }
+  }
+  return uniqueProcessId(processIds);
+}
+
+function androidEmulatorHostProcessId(serial, env, options = {}) {
+  const platform = options.platform || process.platform;
+  const port = androidEmulatorConsolePort(serial);
+  if (!port) {
+    return null;
+  }
+
+  try {
+    if (platform === 'darwin') {
+      return lsofListeningProcessId(port, env, options);
+    }
+    if (platform === 'win32') {
+      return windowsListeningProcessId(port, env, options);
+    }
+    if (platform === 'linux') {
+      for (const resolveProcessId of [
+        () => lsofListeningProcessId(port, env, options),
+        () => linuxSsListeningProcessId(port, env, options),
+        () => linuxProcListeningProcessId(port, options),
+      ]) {
+        try {
+          const processId = resolveProcessId();
+          if (processId) {
+            return processId;
+          }
+        } catch (_error) {
+          // Continue through independent Linux socket-discovery strategies.
+        }
+      }
+    }
+  } catch (_error) {
+    return null;
+  }
+  return null;
+}
+
+function androidActivationResult({
+  method = null,
+  platform,
+  reason = null,
+  serial = null,
+  status,
+}) {
+  return { method, platform, reason, serial, status };
+}
+
+function activateMacAndroidEmulator(
+  environment,
+  processId,
+  serial,
+  options = {}
+) {
+  const captureFn = options.captureFn || capture;
+  const findExecutableFn = options.findExecutableFn || findExecutable;
+  const pathExists = options.pathExists || fs.existsSync;
+  const osascript = pathExists('/usr/bin/osascript')
+    ? '/usr/bin/osascript'
+    : findExecutableFn('osascript', environment.env);
+  if (!osascript) {
+    return androidActivationResult({
+      platform: 'darwin', reason: 'activation-tool-missing', serial,
+      status: 'unavailable',
+    });
+  }
+  const result = captureFn(
+    osascript,
+    ['-e', MACOS_ANDROID_EMULATOR_ACTIVATION_SCRIPT, String(processId)],
+    { env: environment.env, check: false }
+  );
+  const output = result.stdout.trim();
+  if (result.status === 0 && output === 'activated') {
+    return androidActivationResult({
+      method: 'system-events', platform: 'darwin', serial, status: 'activated',
+    });
+  }
+  if (result.status !== 0 || !['not-found', 'refused'].includes(output)) {
+    return androidActivationResult({
+      method: 'system-events',
+      platform: 'darwin',
+      reason: 'activation-error',
+      serial,
+      status: 'unavailable',
+    });
+  }
+  return androidActivationResult({
+    method: 'system-events',
+    platform: 'darwin',
+    reason: output === 'not-found' ? 'window-not-found' : 'activation-refused',
+    serial,
+    status: output === 'not-found' ? 'unavailable' : 'refused',
+  });
+}
+
+function activateWindowsAndroidEmulator(
+  environment,
+  processId,
+  serial,
+  options = {}
+) {
+  const powershell = windowsPowerShellExecutable(environment.env, options);
+  if (!powershell) {
+    return androidActivationResult({
+      platform: 'win32', reason: 'activation-tool-missing', serial,
+      status: 'unavailable',
+    });
+  }
+  const script = WINDOWS_ANDROID_EMULATOR_ACTIVATION_SCRIPT.replace(
+    '__TARGET_PROCESS_ID__',
+    String(processId)
+  ).replace('__TARGET_PORT__', String(androidEmulatorConsolePort(serial)));
+  const captureFn = options.captureFn || capture;
+  const result = captureFn(
+    powershell,
+    windowsPowerShellArguments(script),
+    { env: environment.env, check: false }
+  );
+  const output = result.stdout.trim();
+  if (result.status === 0 && output === 'activated') {
+    return androidActivationResult({
+      method: 'win32', platform: 'win32', serial, status: 'activated',
+    });
+  }
+  if (result.status !== 0 || output === 'error' || ![
+    'not-found',
+    'refused',
+    'refused-taskbar-requested',
+  ].includes(output)) {
+    return androidActivationResult({
+      method: 'win32',
+      platform: 'win32',
+      reason: 'activation-error',
+      serial,
+      status: 'unavailable',
+    });
+  }
+  return androidActivationResult({
+    method: 'win32',
+    platform: 'win32',
+    reason: output === 'not-found'
+      ? 'window-not-found'
+      : output === 'refused-taskbar-requested'
+        ? 'activation-refused-taskbar-requested'
+        : 'activation-refused',
+    serial,
+    status: output === 'not-found' ? 'unavailable' : 'refused',
+  });
+}
+
+function linuxWmctrlWindows(output, processId) {
+  const windows = [];
+  for (const line of String(output).split(/\r?\n/)) {
+    const match = line.match(
+      /^(0x[0-9A-Fa-f]+)\s+\S+\s+(\d+)\s+\S+(?:\s+(.*))?$/
+    );
+    if (match && Number(match[2]) === processId) {
+      windows.push({ id: match[1], title: (match[3] || '').trim() });
+    }
+  }
+  return windows;
+}
+
+function selectLinuxAndroidWindow(windows, avd, port) {
+  if (windows.length === 1) {
+    return { reason: null, window: windows[0] };
+  }
+  const expectedPort = `:${port}`;
+  const exact = windows.filter(window => (
+    window.title.includes(avd) && window.title.includes(expectedPort)
+  ));
+  if (exact.length === 1) {
+    return { reason: null, window: exact[0] };
+  }
+  return {
+    reason: windows.length === 0 ? 'window-not-found' : 'ambiguous-window',
+    window: null,
+  };
+}
+
+function normalizeLinuxWindowId(value) {
+  const candidate = String(value || '').trim();
+  if (!/^(?:0x[0-9A-Fa-f]+|\d+)$/.test(candidate)) {
+    return null;
+  }
+  try {
+    return BigInt(candidate).toString();
+  } catch (_error) {
+    return null;
+  }
+}
+
+function linuxActiveWindowId(env, options = {}) {
+  const captureFn = options.captureFn || capture;
+  const findExecutableFn = options.findExecutableFn || findExecutable;
+  const xdotool = findExecutableFn('xdotool', env);
+  if (xdotool) {
+    try {
+      const result = captureFn(
+        xdotool,
+        ['getactivewindow'],
+        { env, check: false }
+      );
+      if (result.status === 0) {
+        const active = normalizeLinuxWindowId(
+          result.stdout.split(/\r?\n/)[0]
+        );
+        if (active) {
+          return active;
+        }
+      }
+    } catch (_error) {
+      // Try another verifier if the executable disappeared or cannot run.
+    }
+  }
+
+  const xprop = findExecutableFn('xprop', env);
+  if (xprop) {
+    try {
+      const result = captureFn(
+        xprop,
+        ['-root', '_NET_ACTIVE_WINDOW'],
+        { env, check: false }
+      );
+      if (result.status === 0) {
+        const match = result.stdout.match(
+          /window id #\s*(0x[0-9A-Fa-f]+)/i
+        );
+        const active = match ? normalizeLinuxWindowId(match[1]) : null;
+        if (active) {
+          return active;
+        }
+      }
+    } catch (_error) {
+      // The activation request remains valid even without verification.
+    }
+  }
+  return null;
+}
+
+function linuxRequestedActivationResult(
+  environment,
+  selectedWindow,
+  method,
+  serial,
+  options = {}
+) {
+  const activeWindow = linuxActiveWindowId(environment.env, options);
+  const selectedId = normalizeLinuxWindowId(selectedWindow.id);
+  if (activeWindow && selectedId && activeWindow === selectedId) {
+    return androidActivationResult({
+      method, platform: 'linux', serial, status: 'activated',
+    });
+  }
+  return androidActivationResult({
+    method,
+    platform: 'linux',
+    reason: 'window-manager-controls-focus',
+    serial,
+    status: 'requested',
+  });
+}
+
+function swayContainerForProcess(tree, processId, avd, port) {
+  const candidates = [];
+  const visit = node => {
+    if (!node || typeof node !== 'object') {
+      return;
+    }
+    if (
+      Number(node.pid) === processId
+      && Number.isInteger(node.id)
+      && node.id > 0
+    ) {
+      candidates.push({ id: node.id, title: String(node.name || '') });
+    }
+    for (const child of [...(node.nodes || []), ...(node.floating_nodes || [])]) {
+      visit(child);
+    }
+  };
+  visit(tree);
+  return selectLinuxAndroidWindow(candidates, avd, port);
+}
+
+function activateLinuxAndroidEmulator(
+  environment,
+  processId,
+  serial,
+  options = {}
+) {
+  const env = environment.env;
+  const captureFn = options.captureFn || capture;
+  const findExecutableFn = options.findExecutableFn || findExecutable;
+  const port = androidEmulatorConsolePort(serial);
+  const wayland = (
+    String(env.XDG_SESSION_TYPE || '').toLowerCase() === 'wayland'
+    || Boolean(env.WAYLAND_DISPLAY)
+  );
+  let lastReason = null;
+  let x11ToolAvailable = false;
+
+  if (env.SWAYSOCK) {
+    const swaymsg = findExecutableFn('swaymsg', env);
+    if (swaymsg) {
+      const treeResult = captureFn(
+        swaymsg,
+        ['-r', '-t', 'get_tree'],
+        { env, check: false }
+      );
+      if (treeResult.status === 0) {
+        try {
+          const selected = swayContainerForProcess(
+            JSON.parse(treeResult.stdout),
+            processId,
+            environment.avd,
+            port
+          );
+          if (selected.window) {
+            const focus = captureFn(
+              swaymsg,
+              ['-r', `[con_id=${selected.window.id}] focus`],
+              { env, check: false }
+            );
+            const response = JSON.parse(focus.stdout || '[]');
+            if (
+              focus.status === 0
+              && Array.isArray(response)
+              && response.some(item => item && item.success === true)
+            ) {
+              return androidActivationResult({
+                method: 'sway', platform: 'linux', serial, status: 'activated',
+              });
+            }
+            lastReason = 'activation-refused';
+          } else {
+            lastReason = selected.reason;
+          }
+        } catch (_error) {
+          lastReason = 'activation-error';
+          // Continue to X11/XWayland fallbacks when Sway IPC cannot activate it.
+        }
+      }
+    }
+  }
+
+  if (!env.DISPLAY) {
+    const reason = lastReason
+      || (wayland ? 'wayland-focus-policy' : 'display-unavailable');
+    return androidActivationResult({
+      platform: 'linux',
+      reason,
+      serial,
+      status: reason === 'activation-refused' ? 'refused' : 'unavailable',
+    });
+  }
+
+  const wmctrl = findExecutableFn('wmctrl', env);
+  if (wmctrl) {
+    x11ToolAvailable = true;
+    const list = captureFn(wmctrl, ['-lp'], { env, check: false });
+    if (list.status === 0) {
+      const selected = selectLinuxAndroidWindow(
+        linuxWmctrlWindows(list.stdout, processId),
+        environment.avd,
+        port
+      );
+      if (selected.window) {
+        const activated = captureFn(
+          wmctrl,
+          ['-i', '-a', selected.window.id],
+          { env, check: false }
+        );
+        if (activated.status === 0) {
+          return linuxRequestedActivationResult(
+            environment,
+            selected.window,
+            wayland ? 'xwayland-wmctrl' : 'wmctrl',
+            serial,
+            { captureFn, findExecutableFn }
+          );
+        }
+        lastReason = 'activation-refused';
+      } else {
+        lastReason = selected.reason;
+      }
+    } else {
+      lastReason = 'activation-error';
+    }
+  }
+
+  if (!wayland) {
+    const xdotool = findExecutableFn('xdotool', env);
+    if (xdotool) {
+      x11ToolAvailable = true;
+      const search = captureFn(
+        xdotool,
+        ['search', '--all', '--pid', String(processId)],
+        { env, check: false }
+      );
+      if (search.status === 0) {
+        const windows = [];
+        for (const id of search.stdout.split(/\r?\n/).map(line => line.trim())) {
+          if (!/^\d+$/.test(id)) {
+            continue;
+          }
+          const name = captureFn(
+            xdotool,
+            ['getwindowname', id],
+            { env, check: false }
+          );
+          windows.push({ id, title: name.status === 0 ? name.stdout.trim() : '' });
+        }
+        const selected = selectLinuxAndroidWindow(
+          windows,
+          environment.avd,
+          port
+        );
+        if (selected.window) {
+          captureFn(
+            xdotool,
+            ['windowmap', selected.window.id],
+            { env, check: false }
+          );
+          const activated = captureFn(
+            xdotool,
+            ['windowactivate', selected.window.id],
+            { env, check: false }
+          );
+          if (activated.status === 0) {
+            return linuxRequestedActivationResult(
+              environment,
+              selected.window,
+              'xdotool',
+              serial,
+              { captureFn, findExecutableFn }
+            );
+          }
+          lastReason = 'activation-refused';
+        } else {
+          lastReason = selected.reason;
+        }
+      } else {
+        lastReason = 'activation-error';
+      }
+    }
+  }
+
+  const reason = wayland
+    ? 'wayland-focus-policy'
+    : lastReason || (x11ToolAvailable
+      ? 'activation-error'
+      : 'x11-tool-missing');
+  return androidActivationResult({
+    platform: 'linux',
+    reason,
+    serial,
+    status: reason === 'activation-refused' ? 'refused' : 'unavailable',
+  });
+}
+
+function normalizeAndroidActivationResult(result, platform, serial) {
+  if (result && typeof result === 'object' && typeof result.status === 'string') {
+    return result;
+  }
+  return androidActivationResult({
+    platform,
+    reason: result === true ? null : 'activation-refused',
+    serial,
+    status: result === true ? 'activated' : 'refused',
+  });
+}
+
+function activateAndroidEmulator(environment, options = {}) {
+  const platform = options.platform || process.platform;
+  const captureFn = options.captureFn || capture;
+  let serial = options.serial || null;
+  try {
+    serial = serial || runningAndroidAvdSerial(environment, captureFn);
+    if (!serial) {
+      return androidActivationResult({
+        platform, reason: 'serial-not-found', status: 'unavailable',
+      });
+    }
+    if (!['darwin', 'win32', 'linux'].includes(platform)) {
+      return androidActivationResult({
+        platform, reason: 'unsupported-platform', serial, status: 'unavailable',
+      });
+    }
+    const processIdFn = options.processIdFn || androidEmulatorHostProcessId;
+    const processId = processIdFn(serial, environment.env, {
+      captureFn,
+      findExecutableFn: options.findExecutableFn,
+      pathExists: options.pathExists,
+      platform,
+      procRoot: options.procRoot,
+      readDirectoryFn: options.readDirectoryFn,
+      readFileFn: options.readFileFn,
+      readLinkFn: options.readLinkFn,
+    });
+    if (!processId) {
+      return androidActivationResult({
+        platform, reason: 'process-not-found', serial, status: 'unavailable',
+      });
+    }
+
+    const activationOptions = {
+      captureFn,
+      findExecutableFn: options.findExecutableFn,
+      pathExists: options.pathExists,
+    };
+    if (platform === 'darwin') {
+      return activateMacAndroidEmulator(
+        environment, processId, serial, activationOptions
+      );
+    }
+    if (platform === 'win32') {
+      return activateWindowsAndroidEmulator(
+        environment, processId, serial, activationOptions
+      );
+    }
+    return activateLinuxAndroidEmulator(
+      environment, processId, serial, activationOptions
+    );
+  } catch (_error) {
+    return androidActivationResult({
+      platform, reason: 'activation-error', serial, status: 'unavailable',
+    });
+  }
+}
+
+function safelyActivateAndroidEmulator(
+  activateFn,
+  environment,
+  options = {}
+) {
+  const platform = options.platform || process.platform;
+  try {
+    return normalizeAndroidActivationResult(
+      activateFn(environment, options),
+      platform,
+      options.serial || null
+    );
+  } catch (_error) {
+    return androidActivationResult({
+      platform,
+      reason: 'activation-error',
+      serial: options.serial || null,
+      status: 'unavailable',
+    });
+  }
+}
+
+function reportAndroidEmulatorActivation(
+  activation,
+  environment,
+  options = {}
+) {
+  const platform = options.platform || activation.platform || process.platform;
+  const log = options.log || console.log;
+  const warn = options.warn || console.warn;
+  const afterIos = options.afterIos === true;
+  if (activation.status === 'activated') {
+    log(
+      afterIos
+        ? '✓ Android emulator window returned to the front after iOS launch'
+        : '✓ Android emulator window brought to the front'
+    );
+    return;
+  }
+  if (activation.status === 'requested') {
+    warn(
+      activation.method === 'xwayland-wmctrl'
+        ? 'Android emulator activation requested through XWayland; the '
+          + 'Wayland compositor controls final focus'
+        : 'Android emulator activation requested; the desktop window manager '
+          + 'controls final focus'
+    );
+    return;
+  }
+  if (platform === 'win32') {
+    if (activation.reason === 'activation-refused-taskbar-requested') {
+      warn(
+        'Android app launched, but Windows did not grant foreground focus. '
+        + 'OnRamp restored the window and asked Windows to flash its taskbar '
+        + 'button; select Android Emulator from the taskbar or press Alt+Tab.'
+      );
+    } else {
+      warn(
+        'Android app launched, but OnRamp could not activate the selected '
+        + 'emulator window. Select Android Emulator from the taskbar or press '
+        + 'Alt+Tab.'
+      );
+    }
+    return;
+  }
+  if (platform === 'linux') {
+    const env = environment.env || {};
+    const wayland = (
+      String(env.XDG_SESSION_TYPE || '').toLowerCase() === 'wayland'
+      || Boolean(env.WAYLAND_DISPLAY)
+    );
+    const serial = activation.serial || 'the selected Android emulator';
+    if (activation.reason === 'display-unavailable') {
+      warn(
+        'Android app launched, but no graphical Linux display is available. '
+        + 'Open the emulator from your desktop session.'
+      );
+    } else if (
+      activation.reason === 'process-not-found'
+      || activation.reason === 'window-not-found'
+    ) {
+      warn(
+        `Android app launched, but OnRamp could not find ${serial}'s desktop `
+        + 'window. It may be embedded in Android Studio; select it manually.'
+      );
+    } else if (activation.reason === 'ambiguous-window') {
+      warn(
+        `Android app launched, but ${serial} owns multiple possible windows. `
+        + 'Select Android Emulator from the task switcher.'
+      );
+    } else if (activation.reason === 'x11-tool-missing') {
+      warn(
+        'Android app launched, but foreground control needs wmctrl or xdotool '
+        + 'on this X11 desktop. Install either utility, or select Android '
+        + 'Emulator from the task switcher.'
+      );
+    } else if (activation.reason === 'wayland-focus-policy' || wayland) {
+      warn(
+        'Android app launched, but this Wayland compositor did not grant '
+        + 'foreground focus. Select Android Emulator from the task switcher.'
+      );
+    } else {
+      warn(
+        `Android app launched, but OnRamp could not activate ${serial} `
+        + 'on this X11 desktop. Select Android Emulator from the task switcher.'
+      );
+    }
+    return;
+  }
+  if (platform === 'darwin') {
+    warn(
+      'Android app launched, but OnRamp could not bring its emulator window '
+      + 'to the front. Allow terminal window control if macOS asks, or select '
+      + 'Android Emulator from the Dock or Mission Control.'
+    );
+  }
 }
 
 function androidRunArguments(port, device, applicationId) {
@@ -754,9 +1799,26 @@ async function ensureAndroidEmulator(environment, options = {}) {
   const captureFn = options.captureFn || capture;
   const spawnFn = options.spawnFn || spawn;
   const log = options.log || console.log;
+  const activateFn = options.activateFn || activateAndroidEmulator;
+  const activate = serial => safelyActivateAndroidEmulator(
+    activateFn,
+    environment,
+    {
+      captureFn,
+      findExecutableFn: options.findExecutableFn,
+      pathExists: options.pathExists,
+      platform: options.platform,
+      procRoot: options.procRoot,
+      readDirectoryFn: options.readDirectoryFn,
+      readFileFn: options.readFileFn,
+      readLinkFn: options.readLinkFn,
+      serial,
+    }
+  );
   const running = runningAndroidAvdSerial(environment, captureFn);
   if (running) {
     log(`Using running Android emulator ${running}`);
+    activate(running);
     return running;
   }
 
@@ -773,7 +1835,7 @@ async function ensureAndroidEmulator(environment, options = {}) {
   log(`Cold-starting Android virtual device ${environment.avd}`);
 
   try {
-    return await waitForAndroidEmulator(environment, {
+    const serial = await waitForAndroidEmulator(environment, {
       captureFn,
       delay: options.delay,
       now: options.now,
@@ -781,6 +1843,8 @@ async function ensureAndroidEmulator(environment, options = {}) {
       startup,
       timeoutMs: options.timeoutMs,
     });
+    activate(serial);
+    return serial;
   } finally {
     startup.release();
   }
@@ -1512,15 +2576,20 @@ async function prepareAndroidDevelopment({
 async function launchPreparedAndroid(
   prepared,
   {
+    activateEmulator = activateAndroidEmulator,
     metroPort,
     metroStartingPort,
     metroInteractive = true,
     metroLabel,
+    platform = process.platform,
     rebuild = false,
   } = {}
 ) {
   const { applicationId, environment, outputDir } = prepared;
-  const device = await ensureAndroidEmulator(environment);
+  const device = await ensureAndroidEmulator(environment, {
+    activateFn: activateEmulator,
+    platform,
+  });
   const metro = await startMetro({
     output: outputDir,
     requestedPort: metroPort,
@@ -1579,7 +2648,14 @@ async function launchPreparedAndroid(
       });
     }
     wakeAndroidEmulators(environment.adb, environment.env);
+    const activation = safelyActivateAndroidEmulator(
+      activateEmulator,
+      environment,
+      { platform, serial: device }
+    );
+    reportAndroidEmulatorActivation(activation, environment, { platform });
     console.log('Android app launched. Metro remains active; press Ctrl+C to stop.');
+    metro.androidDevice = device;
     return metro;
   } catch (error) {
     metro.stop('SIGTERM');
@@ -1597,13 +2673,16 @@ async function runAndroid(options) {
 }
 
 module.exports = {
+  activateAndroidEmulator,
   androidAvdApi,
   androidAvdDisplay,
   androidAvdMetadata,
   androidAppIsInstalled,
   androidApplicationId,
   androidEmulatorArchitectureMismatch,
+  androidEmulatorConsolePort,
   androidEmulatorLaunchArgs,
+  androidEmulatorHostProcessId,
   androidEmulatorAvdName,
   androidHostExecutableArchitecture,
   androidRunArguments,
@@ -1621,9 +2700,11 @@ module.exports = {
   prepareAndroidDevelopment,
   prepareAndroidEnvironment,
   requireClipboardCapableEmulator,
+  reportAndroidEmulatorActivation,
   resolveAndroidEnvironment,
   runningAndroidAvdSerial,
   runAndroid,
+  safelyActivateAndroidEmulator,
   selectAndroidAvd,
   waitForAndroidEmulator,
   wakeAndroidEmulators,
