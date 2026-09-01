@@ -60,6 +60,16 @@ Android. Define styles with `css.create` and pass the resulting typed styles to
 the `style` prop. Avoid casting inline style objects with `as any`; those casts
 hide values that browsers accept but native renderers reject.
 
+In every shared route or component, import both APIs from React Strict DOM:
+
+```tsx
+import { css, html } from 'react-strict-dom';
+```
+
+Do not import `css` directly from `@stylexjs/stylex` in shared code. Direct
+StyleX output is web-only and native renderers will ignore it. Use a direct
+StyleX import only inside an explicitly web-only `.web.*` module.
+
 Native text must live in a text-bearing element. In particular, wrap text and
 interpolated values inside layout elements with `html.span`:
 

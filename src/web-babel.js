@@ -67,6 +67,10 @@ function createWebBabelOptions(
     configFile: false,
     presets,
     plugins: [
+      // This order is a cross-platform contract. React Strict DOM identifies
+      // its css.create calls, StyleX emits their web rules, and the final pass
+      // removes only the named css import that those transforms consumed.
+      // Native compilation keeps React Strict DOM's runtime style objects.
       reactStrictPlugin,
       [
         stylexPluginPath,

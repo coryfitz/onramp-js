@@ -1,9 +1,13 @@
 const assert = require('node:assert/strict');
 const { EventEmitter } = require('node:events');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 const { PassThrough } = require('node:stream');
 const test = require('node:test');
 
 const {
+  androidApplicationId,
   androidEmulatorArchitectureMismatch,
   androidEmulatorLaunchArgs,
   androidRunArguments,
@@ -181,8 +185,8 @@ test('cold-launches an AVD and waits for Android to finish booting', async () =>
   assert.ok(captures.some(([, args]) => args.includes('sys.boot_completed')));
 });
 
-test('runs React Native on the selected Android emulator only', () => {
-  assert.deepEqual(androidRunArguments(8081, 'emulator-5556'), [
+test('runs React Native on the selected Android emulator with its exact application ID', () => {
+  assert.deepEqual(androidRunArguments(8081, 'emulator-5556', 'com.example.app.dev'), [
     'react-native',
     'run-android',
     '--device',
@@ -191,7 +195,146 @@ test('runs React Native on the selected Android emulator only', () => {
     '8081',
     '--no-packager',
     '--active-arch-only',
+    '--appId',
+    'com.example.app.dev',
   ]);
+});
+
+test('resolves the effective debug application ID including a Gradle suffix', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'onramp-android-id-test-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const gradlePath = path.join(root, 'android', 'app', 'build.gradle');
+  fs.mkdirSync(path.dirname(gradlePath), { recursive: true });
+  fs.writeFileSync(gradlePath, `
+android {
+    namespace "com.example.app"
+    defaultConfig {
+        applicationId "com.example.app"
+    }
+    buildTypes {
+        debug {
+            buildConfigField "String", "JSON", '{"nested": true}'
+            applicationIdSuffix ".dev"
+        }
+        staging {
+            applicationIdSuffix ".beta"
+        }
+    }
+}
+`);
+
+  assert.equal(androidApplicationId(root), 'com.example.app.dev');
+});
+
+test('keeps an unsuffixed debug application ID unchanged', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'onramp-android-id-test-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const gradlePath = path.join(root, 'android', 'app', 'build.gradle');
+  fs.mkdirSync(path.dirname(gradlePath), { recursive: true });
+  fs.writeFileSync(gradlePath, `
+android {
+    defaultConfig {
+        applicationId = "com.example.app"
+    }
+    buildTypes {
+        debug {
+            signingConfig signingConfigs.debug
+        }
+    }
+}
+`);
+
+  assert.equal(androidApplicationId(root), 'com.example.app');
+});
+
+test('supports assignment syntax for a debug application ID suffix', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'onramp-android-id-test-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const gradlePath = path.join(root, 'android', 'app', 'build.gradle');
+  fs.mkdirSync(path.dirname(gradlePath), { recursive: true });
+  fs.writeFileSync(gradlePath, `
+android {
+    defaultConfig {
+        applicationId = "com.example.app"
+    }
+    buildTypes {
+        getByName("debug") {
+            applicationIdSuffix = ".local"
+        }
+    }
+}
+`);
+
+  assert.equal(androidApplicationId(root), 'com.example.app.local');
+});
+
+test('ignores comments and quoted Gradle identity decoys', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'onramp-android-id-test-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const gradlePath = path.join(root, 'android', 'app', 'build.gradle');
+  fs.mkdirSync(path.dirname(gradlePath), { recursive: true });
+  fs.writeFileSync(gradlePath, `
+// android { defaultConfig { applicationId "com.comment.decoy" } }
+android {
+    def example = 'defaultConfig { applicationId "com.string.decoy" }'
+    defaultConfig {
+        // applicationId "com.comment.decoy"
+        applicationId "com.example.app"
+    }
+    // buildTypes { debug { applicationIdSuffix ".comment" } }
+    def otherExample = 'buildTypes { debug { applicationIdSuffix ".string" } }'
+    buildTypes {
+        debug {
+            // applicationIdSuffix ".comment"
+            def suffixExample = 'applicationIdSuffix ".string"'
+            applicationIdSuffix ".dev"
+        }
+    }
+}
+`);
+
+  assert.equal(androidApplicationId(root), 'com.example.app.dev');
+});
+
+test('rejects a dynamic debug application ID suffix', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'onramp-android-id-test-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const gradlePath = path.join(root, 'android', 'app', 'build.gradle');
+  fs.mkdirSync(path.dirname(gradlePath), { recursive: true });
+  fs.writeFileSync(gradlePath, `
+android {
+    defaultConfig {
+        applicationId "com.example.app"
+    }
+    buildTypes {
+        debug {
+            applicationIdSuffix project.findProperty("debugSuffix")
+        }
+    }
+}
+`);
+
+  assert.throws(
+    () => androidApplicationId(root),
+    /applicationIdSuffix is not a static string literal/
+  );
+
+  fs.writeFileSync(gradlePath, `
+android {
+    defaultConfig {
+        applicationId "com.example.app"
+    }
+    buildTypes {
+        debug {
+            applicationIdSuffix "." + project.findProperty("debugSuffix")
+        }
+    }
+}
+`);
+  assert.throws(
+    () => androidApplicationId(root),
+    /applicationIdSuffix is not a static string literal/
+  );
 });
 
 test('opens a cached Android app and reconnects it to Metro', () => {
@@ -199,12 +342,16 @@ test('opens a cached Android app and reconnects it to Metro', () => {
   launchInstalledAndroidApp(
     { adb: '/sdk/adb', env: { ANDROID_HOME: '/sdk' } },
     'emulator-5554',
-    'com.example.app',
+    'com.example.app.dev',
     8081,
     (command, args) => {
       calls.push([command, args]);
       return args.includes('resolve-activity')
-        ? { status: 0, stdout: 'com.example.app/.MainActivity\n', stderr: '' }
+        ? {
+          status: 0,
+          stdout: 'com.example.app.dev/com.example.app.MainActivity\n',
+          stderr: '',
+        }
         : { status: 0, stdout: '', stderr: '' };
     }
   );
@@ -214,8 +361,28 @@ test('opens a cached Android app and reconnects it to Metro', () => {
   ]);
   assert.ok(calls.some(([, args]) => args.includes('force-stop')));
   assert.deepEqual(calls.at(-1)[1].slice(-2), [
-    '-n', 'com.example.app/.MainActivity',
+    '-n', 'com.example.app.dev/com.example.app.MainActivity',
   ]);
+});
+
+test('fails clearly when a cached Android launcher activity cannot be resolved', () => {
+  const calls = [];
+  assert.throws(
+    () => launchInstalledAndroidApp(
+      { adb: '/sdk/adb', env: { ANDROID_HOME: '/sdk' } },
+      'emulator-5554',
+      'com.example.app.dev',
+      8081,
+      (command, args) => {
+        calls.push([command, args]);
+        return args.includes('resolve-activity')
+          ? { status: 1, stdout: '', stderr: 'No launcher activity found' }
+          : { status: 0, stdout: '', stderr: '' };
+      }
+    ),
+    /Could not resolve the Android launcher activity for com\.example\.app\.dev.*No launcher/
+  );
+  assert.equal(calls.some(([, args]) => args.includes('am')), false);
 });
 
 test('reports an Android Emulator fatal error without waiting for boot timeout', async () => {

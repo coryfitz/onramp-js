@@ -358,7 +358,7 @@ function androidEmulatorLaunchArgs(avd) {
   return [`@${avd}`, '-no-snapshot-load', '-no-boot-anim'];
 }
 
-function androidRunArguments(port, device) {
+function androidRunArguments(port, device, applicationId) {
   return [
     'react-native',
     'run-android',
@@ -368,22 +368,197 @@ function androidRunArguments(port, device) {
     String(port),
     '--no-packager',
     '--active-arch-only',
+    '--appId',
+    applicationId,
   ];
 }
 
-function androidApplicationId(outputDir, nativeConfig) {
-  if (nativeConfig && nativeConfig.android.package) {
-    return nativeConfig.android.package;
+function gradleTokens(source) {
+  const tokens = [];
+  for (let index = 0; index < source.length;) {
+    const character = source[index];
+    const next = source[index + 1];
+    if (/\s/.test(character)) {
+      index += 1;
+      continue;
+    }
+    if (character === '/' && next === '/') {
+      index = source.indexOf('\n', index + 2);
+      if (index === -1) break;
+      continue;
+    }
+    if (character === '/' && next === '*') {
+      const closing = source.indexOf('*/', index + 2);
+      index = closing === -1 ? source.length : closing + 2;
+      continue;
+    }
+    if (character === '"' || character === "'") {
+      const quote = character;
+      const triple = source.slice(index, index + 3) === quote.repeat(3);
+      const delimiterLength = triple ? 3 : 1;
+      const start = index;
+      const contentStart = index + delimiterLength;
+      index = contentStart;
+      while (index < source.length) {
+        if (source[index] === '\\') {
+          index += 2;
+          continue;
+        }
+        if (
+          triple
+            ? source.slice(index, index + 3) === quote.repeat(3)
+            : source[index] === quote
+        ) {
+          const contentEnd = index;
+          index += delimiterLength;
+          tokens.push({
+            end: index,
+            quote,
+            start,
+            type: 'string',
+            value: source.slice(contentStart, contentEnd),
+          });
+          break;
+        }
+        index += 1;
+      }
+      continue;
+    }
+    if (/[A-Za-z_$]/.test(character)) {
+      const start = index;
+      index += 1;
+      while (index < source.length && /[A-Za-z0-9_$]/.test(source[index])) {
+        index += 1;
+      }
+      tokens.push({
+        end: index,
+        start,
+        type: 'identifier',
+        value: source.slice(start, index),
+      });
+      continue;
+    }
+    tokens.push({
+      end: index + 1,
+      start: index,
+      type: 'symbol',
+      value: character,
+    });
+    index += 1;
   }
+  return tokens;
+}
+
+function gradleBlockOpening(tokens, index, name) {
+  if (
+    tokens[index]?.type === 'identifier'
+    && tokens[index].value === name
+    && tokens[index + 1]?.value === '{'
+  ) {
+    return index + 1;
+  }
+  if (
+    tokens[index]?.type === 'identifier'
+    && (tokens[index].value === 'getByName' || tokens[index].value === 'named')
+    && tokens[index + 1]?.value === '('
+    && tokens[index + 2]?.type === 'string'
+    && tokens[index + 2].value === name
+    && tokens[index + 3]?.value === ')'
+    && tokens[index + 4]?.value === '{'
+  ) {
+    return index + 4;
+  }
+  return null;
+}
+
+function gradleBlockContent(source, name) {
+  const tokens = gradleTokens(source);
+  for (let index = 0; index < tokens.length; index += 1) {
+    const openingIndex = gradleBlockOpening(tokens, index, name);
+    if (openingIndex === null) continue;
+    let depth = 1;
+    for (let cursor = openingIndex + 1; cursor < tokens.length; cursor += 1) {
+      if (tokens[cursor].value === '{') {
+        depth += 1;
+      } else if (tokens[cursor].value === '}') {
+        depth -= 1;
+        if (depth === 0) {
+          return source.slice(tokens[openingIndex].end, tokens[cursor].start);
+        }
+      }
+    }
+    return null;
+  }
+  return null;
+}
+
+function gradleLiteralProperty(source, name) {
+  const tokens = gradleTokens(source);
+  let depth = 0;
+  for (let index = 0; index < tokens.length; index += 1) {
+    const token = tokens[index];
+    if (token.value === '{') {
+      depth += 1;
+      continue;
+    }
+    if (token.value === '}') {
+      depth -= 1;
+      continue;
+    }
+    if (depth !== 0 || token.type !== 'identifier' || token.value !== name) {
+      continue;
+    }
+    let valueIndex = index + 1;
+    if (tokens[valueIndex]?.value === '=') valueIndex += 1;
+    const value = tokens[valueIndex];
+    if (value?.type !== 'string') return { found: true, literal: false };
+    const interpolated = value.quote === '"' && /(^|[^\\])\$/.test(value.value);
+    const following = tokens[valueIndex + 1];
+    const statementEnded = (
+      !following
+      || following.value === '}'
+      || /[\r\n;]/.test(source.slice(value.end, following.start))
+    );
+    return interpolated || !statementEnded
+      ? { found: true, literal: false }
+      : { found: true, literal: true, value: value.value };
+  }
+  return { found: false, literal: false };
+}
+
+function androidApplicationId(outputDir, nativeConfig) {
   const buildGradle = fs.readFileSync(
     path.join(outputDir, 'android', 'app', 'build.gradle'),
     'utf8'
   );
-  const match = buildGradle.match(/\bapplicationId\s+["']([^"']+)["']/);
-  if (!match) {
+  const android = gradleBlockContent(buildGradle, 'android');
+  const defaultConfig = android && gradleBlockContent(android, 'defaultConfig');
+  const applicationId = defaultConfig
+    ? gradleLiteralProperty(defaultConfig, 'applicationId')
+    : { found: false, literal: false };
+  if (applicationId.found && !applicationId.literal) {
+    throw new Error(
+      'Could not determine the Android application ID because '
+      + 'android.defaultConfig.applicationId is not a static string literal.'
+    );
+  }
+  const baseApplicationId = applicationId.value || nativeConfig?.android?.package;
+  if (!baseApplicationId) {
     throw new Error('Could not determine the Android application ID.');
   }
-  return match[1];
+  const buildTypes = android && gradleBlockContent(android, 'buildTypes');
+  const debug = buildTypes && gradleBlockContent(buildTypes, 'debug');
+  const suffixProperty = debug
+    ? gradleLiteralProperty(debug, 'applicationIdSuffix')
+    : { found: false, literal: false };
+  if (suffixProperty.found && !suffixProperty.literal) {
+    throw new Error(
+      'Could not determine the Android debug application ID because '
+      + 'android.buildTypes.debug.applicationIdSuffix is not a static string literal.'
+    );
+  }
+  const suffix = suffixProperty.value || '';
+  return `${baseApplicationId}${suffix}`;
 }
 
 function androidAppIsInstalled(
@@ -439,7 +614,14 @@ function launchInstalledAndroidApp(
   const component = resolved.stdout
     .split(/\r?\n/)
     .map(line => line.trim())
-    .find(line => line.includes('/')) || `${applicationId}/.MainActivity`;
+    .find(line => line.includes('/'));
+  if (!component) {
+    const detail = String(resolved.stderr || resolved.stdout || '').trim();
+    throw new Error(
+      `Could not resolve the Android launcher activity for ${applicationId}.`
+      + (detail ? ` ${detail}` : '')
+    );
+  }
   captureFn(
     environment.adb,
     ['-s', device, 'shell', 'am', 'force-stop', applicationId],
@@ -1382,7 +1564,7 @@ async function launchPreparedAndroid(
       );
       await runAsync(
         'npx',
-        androidRunArguments(metro.port, device),
+        androidRunArguments(metro.port, device, applicationId),
         outputDir,
         environment.env,
         {

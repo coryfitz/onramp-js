@@ -260,6 +260,20 @@ Unitless CSS line-height ratios must be strings (`'1.5'`); React Native treats
 numeric line heights as absolute points. Percentage dimensions require
 `boxSizing: 'border-box'`, though flex sizing is preferred when possible.
 
+Universal modules must import both styling and elements through React Strict
+DOM:
+
+```tsx
+import { css, html } from 'react-strict-dom';
+```
+
+Do not import `css` directly from `@stylexjs/stylex` in shared code. That
+transform produces web class tokens that React Strict DOM's native renderer
+does not apply. A direct StyleX import is appropriate only in an explicitly
+web-only `.web.*` module. The web Babel pipeline depends on this contract and
+must keep the React Strict DOM transform first, StyleX second, and the
+unreferenced-import cleanup last.
+
 Scrolling is route-owned. The generated `ScrollScreen` component provides a
 native `ScrollView` and a transparent web wrapper for document-like pages.
 Routes built around a `FlatList`, their own `ScrollView`, a map, or a fixed
