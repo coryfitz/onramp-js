@@ -15,6 +15,7 @@ const {
   preferredAndroidSystemImage,
   removeAndroidSdkPackages,
 } = require('./android-sdk');
+const { cleanupSupersededAndroidSystemImages } = require('./android-image-cleanup');
 const { addNativePlatforms } = require('./native');
 const {
   cachedNativeBuild,
@@ -2082,6 +2083,204 @@ function createAndroidAvd(
   return name;
 }
 
+function inspectAndroidAvdForCleanup(avd, sdk, env) {
+  if (!/^OnRamp_API_\d+(?:_\d+)*$/.test(avd)) {
+    return null;
+  }
+  const avdHome = androidAvdHome(env);
+  const locator = path.join(avdHome, avd + '.ini');
+  const metadata = androidAvdMetadata(avd, sdk, env);
+  const directory = path.join(avdHome, avd + '.avd');
+  const config = path.join(directory, 'config.ini');
+  if (
+    !metadata.valid
+    || !metadata.stable
+    || metadata.directory !== directory
+    || fs.lstatSync(locator).isSymbolicLink()
+    || fs.lstatSync(directory).isSymbolicLink()
+    || fs.lstatSync(config).isSymbolicLink()
+    || fs.realpathSync(directory) !== path.join(
+      fs.realpathSync(avdHome), avd + '.avd'
+    )
+  ) {
+    return null;
+  }
+  const installedImage = path.join(
+    fs.realpathSync(sdk), ...metadata.packagePath.split(';')
+  );
+  const systemImage = path.join(metadata.image, 'system.img');
+  if (
+    !fs.lstatSync(metadata.image).isDirectory()
+    || fs.realpathSync(metadata.image) !== installedImage
+    || !fs.existsSync(systemImage)
+  ) {
+    return null;
+  }
+  const imageStat = fs.lstatSync(systemImage);
+  if (
+    !imageStat.isFile()
+    || imageStat.size === 0
+    || fs.realpathSync(systemImage) !== path.join(installedImage, 'system.img')
+  ) {
+    return null;
+  }
+  const locatorContents = fs.readFileSync(locator, 'utf8');
+  const configContents = fs.readFileSync(config, 'utf8');
+  // Do not let avdmanager and OnRamp interpret duplicate or malformed keys
+  // differently when deciding which directory will be deleted.
+  for (const contents of [locatorContents, configContents]) {
+    const keys = new Set();
+    for (const rawLine of contents.split(/\r?\n/)) {
+      const line = rawLine.trim();
+      if (!line || line.startsWith('#') || line.startsWith(';')) {
+        continue;
+      }
+      const separator = line.indexOf('=');
+      const key = line.slice(0, separator).trim();
+      if (separator <= 0 || !key || keys.has(key)) {
+        throw new Error('Android virtual device metadata is ambiguous for ' + avd);
+      }
+      keys.add(key);
+    }
+  }
+  const locatorValues = parseIni(locatorContents);
+  if (
+    (locatorValues.has('path') && !path.isAbsolute(locatorValues.get('path')))
+    || (
+      locatorValues.has('path.rel')
+      && path.resolve(path.dirname(avdHome), locatorValues.get('path.rel')) !== directory
+    )
+  ) {
+    return null;
+  }
+  return {
+    ...metadata,
+    locatorContents,
+    configContents,
+    locked: fs.readdirSync(directory).some(name => /\.lock$/.test(name)),
+  };
+}
+
+function activeAndroidAvdsForCleanup(adb, env, captureFn) {
+  const result = captureFn(adb, ['devices'], { env, check: false });
+  if (
+    result.status !== 0
+    || !/^List of devices attached/m.test(result.stdout || '')
+  ) {
+    throw new Error('Android could not confirm which virtual devices are running');
+  }
+  const active = new Set();
+  for (const line of result.stdout.split(/\r?\n/)) {
+    const [serial, status] = line.trim().split(/\s+/);
+    if (!serial.startsWith('emulator-')) {
+      continue;
+    }
+    if (status !== 'device') {
+      throw new Error('an Android emulator is offline or still starting');
+    }
+    const name = androidEmulatorAvdName(adb, serial, env, captureFn);
+    if (!name || /^KO\b|^error\b/i.test(name)) {
+      throw new Error('a running Android virtual device could not be identified');
+    }
+    active.add(name);
+  }
+  return active;
+}
+
+async function cleanupSupersededAndroidAvds({
+  avdManager,
+  replacement,
+  avds,
+  environment,
+  promptYesNo: ask,
+  captureFn = capture,
+  log = console.log,
+}) {
+  const removed = [];
+  try {
+    const { sdk, env, adb } = environment;
+    if (!avdManager || !adb) {
+      return removed;
+    }
+    const retained = inspectAndroidAvdForCleanup(replacement, sdk, env);
+    if (!retained || !retained.display.sharp) {
+      return removed;
+    }
+    const active = activeAndroidAvdsForCleanup(adb, env, captureFn);
+    const candidates = avds.filter(avd => avd !== replacement)
+      .map(avd => inspectAndroidAvdForCleanup(avd, sdk, env))
+      .filter(candidate => (
+        candidate
+        && !candidate.locked
+        && !active.has(candidate.avd)
+        && (
+          compareVersions(androidAvdApi(candidate), androidAvdApi(retained)) < 0
+          || (
+            candidate.packagePath === retained.packagePath
+            && !candidate.display.sharp
+          )
+        )
+      ));
+    if (candidates.length === 0) {
+      return removed;
+    }
+    const approved = await ask(
+      'The replacement Android virtual device ' + replacement + ' is ready. '
+      + 'Delete these older OnRamp devices: '
+      + candidates.map(candidate => candidate.avd).join(', ')
+      + '? This permanently deletes their installed apps, settings, snapshots, '
+      + 'and app data. Android system images are kept unless separately '
+      + 'approved for cleanup. (y/N): '
+    );
+    if (!approved) {
+      return removed;
+    }
+    for (const candidate of candidates) {
+      const currentReplacement = inspectAndroidAvdForCleanup(replacement, sdk, env);
+      const current = inspectAndroidAvdForCleanup(candidate.avd, sdk, env);
+      if (
+        !currentReplacement
+        || !currentReplacement.display.sharp
+        || currentReplacement.configContents !== retained.configContents
+        || currentReplacement.locatorContents !== retained.locatorContents
+      ) {
+        throw new Error('the replacement Android virtual device changed during cleanup');
+      }
+      if (
+        !current
+        || current.locked
+        || current.configContents !== candidate.configContents
+        || current.locatorContents !== candidate.locatorContents
+        || activeAndroidAvdsForCleanup(adb, env, captureFn).has(candidate.avd)
+      ) {
+        log('Kept Android virtual device ' + candidate.avd
+          + ' because it is in use or changed during cleanup.');
+        continue;
+      }
+      const result = captureFn(
+        avdManager,
+        ['delete', 'avd', '--name', candidate.avd],
+        { env, check: false }
+      );
+      if (result.status !== 0) {
+        throw new Error('Android could not delete virtual device ' + candidate.avd);
+      }
+      if (
+        fs.existsSync(current.directory)
+        || fs.existsSync(path.join(androidAvdHome(env), candidate.avd + '.ini'))
+      ) {
+        throw new Error('Android did not finish deleting virtual device ' + candidate.avd);
+      }
+      removed.push(candidate.avd);
+      log('Removed superseded Android virtual device ' + candidate.avd + '.');
+    }
+  } catch (error) {
+    log('Android device cleanup stopped: ' + error.message
+      + '. Continuing with the replacement device.');
+  }
+  return removed;
+}
+
 function existingAndroidEnvironmentOrNull(environment, options = {}) {
   try {
     return resolveAndroidEnvironment({
@@ -2431,6 +2630,7 @@ async function prepareAndroidEnvironment(options = {}) {
 
       const approved = await ask(question);
       if (approved) {
+        let replacement = matchingAvd ? matchingAvd.avd : null;
         if (imageNeedsInstall) {
           await (options.installPackages || installAndroidSdkPackages)(
             sdkManager,
@@ -2448,7 +2648,7 @@ async function prepareAndroidEnvironment(options = {}) {
             environment.sdk,
             sdkManager
           );
-          createAndroidAvd(
+          replacement = createAndroidAvd(
             avdManager,
             preferredImage,
             avds,
@@ -2456,6 +2656,46 @@ async function prepareAndroidEnvironment(options = {}) {
             captureFn,
             log
           );
+          await cleanupSupersededAndroidAvds({
+            avdManager,
+            replacement,
+            avds,
+            environment: { ...environment, adb },
+            promptYesNo: ask,
+            captureFn,
+            log,
+          });
+        }
+        try {
+          const replacementMetadata = replacement
+            ? androidAvdMetadata(replacement, environment.sdk, environment.env)
+            : null;
+          if (
+            replacementMetadata
+            && replacementMetadata.valid
+            && replacementMetadata.stable
+            && replacementMetadata.display.sharp
+            && replacementMetadata.packagePath === preferredImage.packageInfo.path
+          ) {
+            await cleanupSupersededAndroidSystemImages({
+              sdkManager,
+              sdk: environment.sdk,
+              env: environment.env,
+              replacementPackagePath: replacementMetadata.packagePath,
+              promptYesNo: ask,
+              listPackagesFn: (manager, sdk, env) => (
+                (options.listPackages || listAndroidSdkPackages)(manager, sdk, env, captureFn)
+              ),
+              removePackagesFn: (manager, sdk, env, selected) => (
+                (options.removePackages || removeAndroidSdkPackages)(
+                  manager, sdk, env, selected, runFn, { platform: options.platform }
+                )
+              ),
+              log,
+            });
+          }
+        } catch (error) {
+          log('Android image cleanup skipped: ' + error.message);
         }
       } else if (stableAvds.length > 0) {
         log(
@@ -2687,6 +2927,7 @@ module.exports = {
   androidHostExecutableArchitecture,
   androidRunArguments,
   compareVersions,
+  cleanupSupersededAndroidAvds,
   connectedAndroidEmulators,
   doctorAndroid,
   enableHostClipboardSharing,

@@ -503,6 +503,18 @@ function upgradeFrontend(
   runner = run
 ) {
   const plan = planFrontendUpgrade(output);
+  const checkResultPath = check && isPythonWrapper()
+    ? process.env.ONRAMP_UPGRADE_CHECK_RESULT
+    : undefined;
+  if (checkResultPath) {
+    // The Python wrapper supplies a private temporary path outside the project.
+    // Keep this machine-readable result independent of human-facing output.
+    fs.writeFileSync(checkResultPath, `${JSON.stringify({
+      schemaVersion: 1,
+      success: plan.conflicts.length === 0,
+      hasChanges: plan.changes.length > 0 || plan.manifestChanged,
+    })}\n`, 'utf8');
+  }
   if (!quiet) {
     printFrontendPlan(plan);
   }

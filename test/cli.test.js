@@ -438,6 +438,7 @@ test('offers and downloads Apple preferred iOS runtime build', async () => {
     { env: {}, xcodebuild: 'xcodebuild', xcrun: 'xcrun' },
     {
       cwd: '/tmp/example/ios',
+      cleanupRuntimes: async () => [],
       runtimeDownloadCachePath: null,
       inspectRuntimes: () => {
         inspections += 1;
@@ -490,6 +491,7 @@ test('retries the latest architecture-specific runtime when a build is unavailab
     { env: {}, xcodebuild: 'xcodebuild', xcrun: 'xcrun' },
     {
       architectureVariant: 'arm64',
+      cleanupRuntimes: async () => [],
       runtimeDownloadCachePath: null,
       inspectRuntimes: () => {
         inspections += 1;
@@ -751,6 +753,7 @@ test('downloads a missing compatible runtime for the explicit host architecture'
     { env: {}, xcodebuild: 'xcodebuild', xcrun: 'xcrun' },
     {
       architectureVariant: 'arm64',
+      cleanupRuntimes: async () => [],
       inspectRuntimes: () => [],
       promptYesNo: async () => true,
       queryWithRetry: async () => {

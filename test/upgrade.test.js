@@ -20,6 +20,7 @@ const {
   printFrontendCheckResult,
   updatedNativeStyleImports,
   updatedFrontendGitignore,
+  upgradeFrontend,
 } = require('../src/upgrade');
 
 const LEGACY_BABEL_CONFIG = `module.exports = {
@@ -379,10 +380,70 @@ test('upgrade check verdict clearly reports success or failure', () => {
   try {
     printFrontendCheckResult({ conflicts: [], changes: [{}], manifestChanged: true });
     printFrontendCheckResult({ conflicts: ['conflict'], changes: [], manifestChanged: false });
+    printFrontendCheckResult({ conflicts: [], changes: [], manifestChanged: false });
   } finally {
     console.log = originalLog;
   }
 
   assert.match(messages[0], /should be successful/);
   assert.match(messages[1], /will not be successful/);
+  assert.match(messages[2], /already up to date/);
+  assert.doesNotMatch(messages[2], /should be successful/);
 });
+
+function snapshotProject(outputDir) {
+  return fs.readdirSync(outputDir, { recursive: true }).sort().map(relativePath => {
+    const filePath = path.join(outputDir, relativePath);
+    return [relativePath, fs.statSync(filePath).isDirectory()
+      ? null
+      : fs.readFileSync(filePath)];
+  });
+}
+
+for (const state of ['current', 'legacy', 'manifest-only', 'conflict']) {
+  test(`Python upgrade check reports ${state} frontend state without project changes`, t => {
+    t.mock.method(console, 'log', () => {});
+    const outputDir = createProject(t);
+    if (state !== 'legacy') {
+      applyFrontendUpgrade(planFrontendUpgrade(outputDir), () => {});
+    }
+    if (state === 'manifest-only') {
+      fs.rmSync(path.join(outputDir, FRONTEND_MANIFEST));
+    }
+    if (state === 'conflict') {
+      const manifestPath = path.join(outputDir, FRONTEND_MANIFEST);
+      const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+      manifest.managedFiles['babel.config.js'] = 'old-framework-hash';
+      fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      fs.writeFileSync(path.join(outputDir, 'babel.config.js'), '// customized tooling\n');
+    }
+    const reportDir = fs.mkdtempSync(path.join(os.tmpdir(), 'onramp-check-result-'));
+    t.after(() => fs.rmSync(reportDir, { recursive: true, force: true }));
+    const reportPath = path.join(reportDir, 'result.json');
+    const previousWrapper = process.env.ONRAMP_PYTHON_WRAPPER;
+    const previousResultPath = process.env.ONRAMP_UPGRADE_CHECK_RESULT;
+    process.env.ONRAMP_PYTHON_WRAPPER = '1';
+    process.env.ONRAMP_UPGRADE_CHECK_RESULT = reportPath;
+    t.after(() => {
+      if (previousWrapper === undefined) delete process.env.ONRAMP_PYTHON_WRAPPER;
+      else process.env.ONRAMP_PYTHON_WRAPPER = previousWrapper;
+      if (previousResultPath === undefined) delete process.env.ONRAMP_UPGRADE_CHECK_RESULT;
+      else process.env.ONRAMP_UPGRADE_CHECK_RESULT = previousResultPath;
+    });
+    const before = snapshotProject(outputDir);
+
+    assert.equal(
+      upgradeFrontend({ output: outputDir, check: true }, () => {
+        assert.fail('An upgrade check must not install dependencies.');
+      }),
+      state !== 'conflict'
+    );
+
+    assert.deepEqual(JSON.parse(fs.readFileSync(reportPath, 'utf8')), {
+      schemaVersion: 1,
+      success: state !== 'conflict',
+      hasChanges: state !== 'current',
+    });
+    assert.deepEqual(snapshotProject(outputDir), before);
+  });
+}

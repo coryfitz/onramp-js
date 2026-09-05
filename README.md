@@ -170,13 +170,25 @@ offering it. Changed Xcode or runtime metadata is checked immediately. If Xcode
 itself is missing, OnRamp can open its Mac App Store page
 after asking; Apple still requires the user to complete the Xcode installation.
 
+After verifying a newly installed iOS runtime, OnRamp offers to remove older
+idle runtimes through Xcode's runtime manager, showing their versions and
+approximate sizes. Removal requires separate confirmation because runtimes are
+shared by all projects and Mac users. Simulator devices and app data remain,
+but older devices require their runtime to be downloaded again before use.
+Current and newer versions, same-version builds, and runtimes with active or
+uncertain device states are retained. Inventory is checked again before each
+removal; failed installs and uncertain cleanup never trigger broad deletion.
+
 The Android command checks Google's stable SDK package list on every launch.
 It offers to install or upgrade the Emulator package and to install the newest
 stable Google APIs system image and create a reusable AVD. If `sdkmanager` is
 missing or too old to run, OnRamp first offers to download verified current
-command-line tools from Google's repository. Every download and global SDK
-change requires confirmation. When Google's installer prints only a download
-URL, OnRamp adds a byte-based progress bar and then reports the extraction
+command-line tools from Google's repository. Downloads and SDK package changes
+require confirmation. After validating replacement command-line tools, OnRamp
+automatically removes strictly older copies in its own `onramp-*` tool
+directories; unrelated tools and same-version copies remain. When Google's
+installer prints only a download URL, OnRamp adds a byte-based progress bar
+and then reports the extraction
 phase while leaving package verification and installation to the official
 Android CLI. OnRamp passes the native host platform explicitly to that CLI so
 a translated tool cannot silently install an Emulator for the wrong CPU
@@ -188,9 +200,14 @@ images remain untouched. URL or checksum mismatch output from the Android CLI
 is treated as failure even when that process exits with status zero. New AVDs
 use the newest regular Pixel profile exposed by Android's tools. OnRamp detects
 generic low-resolution AVDs that blur when scaled, offers to create a sharper
-replacement from the installed system image, preserves the old device and its
-app data, and prefers the sharper matching device. App installation explicitly
-targets that selected emulator even when another device is online. OnRamp then
+replacement from the installed system image, and prefers the sharper matching
+device. After verifying a replacement, OnRamp separately offers cleanup of
+eligible older idle OnRamp devices. This names the devices and requires consent
+to permanently delete their installed apps, data, and snapshots; declining
+keeps them. User-created devices remain. Older system images are offered for
+removal only when no remaining AVD references them and the replacement image
+is verified; uncertain inventories preserve the images. App installation
+explicitly targets that selected emulator even when another device is online. OnRamp then
 enables host clipboard sharing and cold-starts the selected emulator. The cold
 start bypasses stale Quick Boot state without wiping the virtual device's apps
 or data, while disabling the boot animation to shorten that full boot. Android
@@ -232,7 +249,8 @@ npx onramp-js upgrade
 ```
 
 `--check` prints the complete non-mutating upgrade plan and ends with a clear
-verdict explaining whether the upgrade should be successful.
+verdict: already up to date when no frontend changes are pending, or whether
+the proposed upgrade should be successful when updates remain.
 
 The upgrader recognizes unmodified legacy templates, updates `package.json`
 without replacing application dependencies or scripts, installs the selected

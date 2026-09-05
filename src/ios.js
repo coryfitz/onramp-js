@@ -11,6 +11,7 @@ const {
 const { startMetro, warmMetroBundle } = require('./metro');
 const { capture, findExecutable, run, runAsync } = require('./process');
 const { promptYesNo } = require('./prompt');
+const { offerIosRuntimeCleanup } = require('./ios-runtime-cleanup');
 
 const IOS_DESTINATION_QUERY_ATTEMPTS = 3;
 const IOS_DESTINATION_RETRY_DELAY_MS = 500;
@@ -579,6 +580,13 @@ async function ensurePreferredIosSimulatorRuntime(
     ?? IOS_RUNTIME_DOWNLOAD_RETRY_MS;
   const preferred = findPreferred(environment);
   let installed = inspect(environment);
+  const cleanupReplacement = async replacement => {
+    const removed = await (options.cleanupRuntimes || offerIosRuntimeCleanup)(
+      environment,
+      { ...options, replacement }
+    );
+    if (removed && removed.length > 0) installed = inspect(environment) || installed;
+  };
   if (!preferred || installed === null) {
     log(
       'OnRamp could not determine Apple\'s newest compatible iOS '
@@ -602,6 +610,7 @@ async function ensurePreferredIosSimulatorRuntime(
   const current = installed.slice().sort((left, right) => (
     compareIosVersions(right.version, left.version)
   ))[0];
+  const previousRuntimes = installed.map(runtime => ({ ...runtime }));
   const downloadSignature = iosRuntimeDownloadSignature(
     environment,
     preferred,
@@ -729,6 +738,7 @@ async function ensurePreferredIosSimulatorRuntime(
   if (matchingRuntime) {
     clearIosRuntimeDownloadDeferral(cachePath);
     log('✓ iOS Simulator runtime ' + preferred.version + ' installed');
+    await cleanupReplacement(matchingRuntime);
     return { changed: true, installed, preferred };
   }
 
@@ -736,9 +746,11 @@ async function ensurePreferredIosSimulatorRuntime(
     compareIosVersions(right.version, left.version)
   ))[0];
   if (usableRuntime) {
-    const changed = !current
-      || current.version !== usableRuntime.version
-      || current.build !== usableRuntime.build;
+    const changed = !previousRuntimes.some(runtime => (
+      runtime.identifier === usableRuntime.identifier
+      && runtime.version === usableRuntime.version
+      && runtime.build === usableRuntime.build
+    ));
     log(
       'Xcode did not install the preferred runtime build. Continuing with '
       + iosRuntimeDescription(usableRuntime) + '.'
@@ -750,6 +762,8 @@ async function ensurePreferredIosSimulatorRuntime(
         now(),
         retryMs
       );
+    } else {
+      await cleanupReplacement(usableRuntime);
     }
     return { changed, installed, preferred };
   }
@@ -1077,6 +1091,12 @@ async function ensureEligibleIosSimulator(
   }
 
   const selected = selectSimulator(query.destinations, environment);
+  if (installedRuntimes && !installedRuntimes.includes(selected.os)) {
+    await (options.cleanupRuntimes || offerIosRuntimeCleanup)(environment, {
+      ...options,
+      simulatorId: selected.id,
+    });
+  }
   console.log(`Using ${selected.name} (iOS ${selected.os}, ${selected.id})`);
   return selected;
 }

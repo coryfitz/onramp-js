@@ -344,6 +344,63 @@ function moveDirectory(source, destination) {
   }
 }
 
+function pruneOldAndroidCommandLineTools(sdk, sdkManager, options = {}) {
+  const log = options.log || console.log;
+  const removeDirectory = options.removeDirectory || (directory => (
+    fs.rmSync(directory, { recursive: true, force: true })
+  ));
+  try {
+    const toolsRoot = path.join(path.resolve(sdk), 'cmdline-tools');
+    const retained = path.dirname(path.dirname(path.resolve(sdkManager)));
+    const retainedVersion = path.basename(retained).match(
+      /^onramp-(\d+(?:\.\d+)*)(?:-(?:[2-9]|[1-9]\d+))?$/
+    );
+    // A redirected tools root or executable may still depend on an older
+    // directory. Only prune ordinary sibling installs inside this SDK.
+    if (
+      !retainedVersion
+      || path.dirname(retained) !== toolsRoot
+      || fs.realpathSync(toolsRoot) !== path.join(
+        fs.realpathSync(sdk), 'cmdline-tools'
+      )
+      || fs.realpathSync(retained) !== path.join(
+        fs.realpathSync(toolsRoot), path.basename(retained)
+      )
+      || fs.realpathSync(sdkManager) !== path.join(
+        fs.realpathSync(retained), 'bin', path.basename(sdkManager)
+      )
+    ) {
+      return;
+    }
+    for (const entry of fs.readdirSync(toolsRoot, { withFileTypes: true })) {
+      const version = entry.name.match(
+        /^onramp-(\d+(?:\.\d+)*)(?:-(?:[2-9]|[1-9]\d+))?$/
+      );
+      if (
+        !entry.isDirectory()
+        || !version
+        || compareVersions(version[1], retainedVersion[1]) >= 0
+      ) {
+        continue;
+      }
+      const directory = path.join(toolsRoot, entry.name);
+      try {
+        if (fs.lstatSync(directory).isSymbolicLink()) {
+          continue;
+        }
+        removeDirectory(directory);
+        log('Removed superseded OnRamp Android command-line tools ' + entry.name + '.');
+      } catch (error) {
+        log('Could not remove old Android command-line tools ' + entry.name
+          + ': ' + error.message + '. The current tools remain available.');
+      }
+    }
+  } catch (error) {
+    log('Could not inspect old Android command-line tools for cleanup: '
+      + error.message + '. The current tools remain available.');
+  }
+}
+
 async function bootstrapAndroidCommandLineTools({
   sdk,
   env,
@@ -412,6 +469,7 @@ async function bootstrapAndroidCommandLineTools({
         });
         if (result.status === 0) {
           prependPath(env, path.dirname(existing));
+          pruneOldAndroidCommandLineTools(sdk, existing, { log });
           return existing;
         }
       }
@@ -435,6 +493,7 @@ async function bootstrapAndroidCommandLineTools({
       );
     }
     log('✓ Android SDK command-line tools installed');
+    pruneOldAndroidCommandLineTools(sdk, sdkManager, { log });
     return sdkManager;
   } finally {
     fs.rmSync(temporary, { recursive: true, force: true });
@@ -1048,6 +1107,7 @@ module.exports = {
   parseAndroidSdkPackages,
   parseNumericVersion,
   preferredAndroidSystemImage,
+  pruneOldAndroidCommandLineTools,
   removeAndroidSdkPackages,
   runAndroidSdkInstall,
 };
