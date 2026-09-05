@@ -60,7 +60,9 @@
       "<rootDir>/test"
     ],
     "modulePathIgnorePatterns": [
-      "/.onramp/backups/"
+      "/.onramp/backups/",
+      "/ios/",
+      "/android/"
     ],
     "testPathIgnorePatterns": [
       "/node_modules/",

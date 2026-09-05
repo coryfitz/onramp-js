@@ -40,6 +40,33 @@ function createProject(t) {
   return outputDir;
 }
 
+test('fresh generated tooling is already current before its first upgrade', t => {
+  const outputDir = createProject(t);
+  const templateRoot = path.join(__dirname, '..', 'templates');
+  const generatedPackage = JSON.parse(fs.readFileSync(
+    path.join(templateRoot, 'package.json'), 'utf8'
+  ));
+  generatedPackage.name = 'example';
+  generatedPackage.devDependencies['onramp-js'] = packageJson.version;
+  fs.writeFileSync(path.join(outputDir, 'package.json'),
+    `${JSON.stringify(generatedPackage, null, 2)}\n`);
+  for (const [relativePath, content] of Object.entries(managedFileContents())) {
+    const target = path.join(outputDir, relativePath);
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.writeFileSync(target, content);
+  }
+  fs.copyFileSync(path.join(templateRoot, 'project_gitignore'), path.join(outputDir, '.gitignore'));
+  writeFrontendManifest(outputDir);
+  const before = snapshotProject(outputDir);
+
+  const plan = planFrontendUpgrade(outputDir);
+
+  assert.deepEqual(plan.changes, []);
+  assert.deepEqual(plan.conflicts, []);
+  assert.equal(plan.manifestChanged, false);
+  assert.deepEqual(snapshotProject(outputDir), before);
+});
+
 test('plans a legacy frontend migration without overwriting known files', t => {
   const outputDir = createProject(t);
   fs.writeFileSync(path.join(outputDir, 'babel.config.js'), LEGACY_BABEL_CONFIG);
