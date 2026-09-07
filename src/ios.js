@@ -12,6 +12,7 @@ const { startMetro, warmMetroBundle } = require('./metro');
 const { capture, findExecutable, run, runAsync } = require('./process');
 const { promptYesNo } = require('./prompt');
 const { offerIosRuntimeCleanup } = require('./ios-runtime-cleanup');
+const { syncIosNodeEnvironment } = require('./ios-node-env');
 
 const IOS_DESTINATION_QUERY_ATTEMPTS = 3;
 const IOS_DESTINATION_RETRY_DELAY_MS = 500;
@@ -192,6 +193,12 @@ function iosPodsAreCurrent(iosDir, outputDir = path.dirname(iosDir)) {
 
 function ensureIosPods(iosDir, environment, options = {}) {
   const outputDir = options.outputDir || path.dirname(iosDir);
+  const nodeEnvironment = syncIosNodeEnvironment(iosDir);
+  if (nodeEnvironment.changed) {
+    console.log('✓ Xcode now uses the Node executable selected for this OnRamp run');
+  } else if (nodeEnvironment.preservedCustom) {
+    console.log('Preserving custom Xcode Node configuration; it must resolve to the supported Node 22 version.');
+  }
   if (!options.force && iosPodsAreCurrent(iosDir, outputDir)) {
     console.log('✓ iOS Pods are current');
     applyFmtAppleClangWorkaround(iosDir, environment);
@@ -1456,6 +1463,7 @@ module.exports = {
   ensureEligibleIosSimulator,
   ensureIosSimulatorBooted,
   ensurePreferredIosSimulatorRuntime,
+  ensureIosPods,
   iosBundleIdentifier,
   iosAppIsInstalled,
   iosJsLocation,

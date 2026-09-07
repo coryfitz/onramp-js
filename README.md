@@ -89,6 +89,12 @@ Staging configuration); this keeps a development launch from renaming the
 production archive. Plain generated display names still follow `app.json`.
 The shared iOS launch storyboard uses the unsuffixed base brand, since it is
 bundled into every configuration and cannot follow the last development run.
+Before checking/installing Pods, OnRamp refreshes a literal Node pin in the
+ignored `ios/.xcode.env.local` to the executable selected for this run, even
+when Pods are cached. Other settings and comments are retained. App-owned
+dynamic Node resolvers and symlinked configuration are preserved; those must
+resolve to the supported Node 22 version themselves. This prevents an old
+CocoaPods-generated Node 20 path from overriding the updated shell toolchain.
 
 ### Android release signing
 
