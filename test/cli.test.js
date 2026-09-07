@@ -252,7 +252,10 @@ test('mobile completes both preflights before starting either Metro', async () =
   assert.equal(calls[4][1], preparedAndroid.environment);
   assert.equal(calls[4][2].serial, 'emulator-5554');
   assert.equal(calls[4][2].platform, 'darwin');
-  assert.deepEqual(result, { android: androidMetro, ios: iosMetro });
+  assert.equal(result.android, androidMetro);
+  assert.equal(result.ios, iosMetro);
+  assert.equal(typeof result.nativeBuildBaseline.android, 'string');
+  assert.equal(typeof result.nativeBuildBaseline.ios, 'string');
 });
 
 test('mobile does not launch Android when iOS preflight is cancelled', async () => {

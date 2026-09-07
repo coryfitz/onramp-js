@@ -5,6 +5,7 @@ const path = require('node:path');
 const test = require('node:test');
 
 const {
+  SHARED_NATIVE_INPUTS,
   cachedNativeBuild,
   clearNativeBuildState,
   nativeBuildFingerprint,
@@ -43,12 +44,43 @@ test('native fingerprints change for shared and platform-native inputs', () => {
   const root = makeProject();
   try {
     const iosBefore = nativeBuildFingerprint(root, 'ios');
+    const androidBeforeIosChange = nativeBuildFingerprint(root, 'android');
     fs.appendFileSync(path.join(root, 'ios', 'Podfile'), '# native change\n');
     assert.notEqual(nativeBuildFingerprint(root, 'ios'), iosBefore);
+    assert.equal(
+      nativeBuildFingerprint(root, 'android'),
+      androidBeforeIosChange
+    );
 
     const androidBefore = nativeBuildFingerprint(root, 'android');
-    fs.writeFileSync(path.join(root, 'package-lock.json'), '{"lockfileVersion":4}\n');
+    fs.appendFileSync(
+      path.join(root, 'android', 'settings.gradle'),
+      '# native change\n'
+    );
     assert.notEqual(nativeBuildFingerprint(root, 'android'), androidBefore);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('every shared native input invalidates both platform fingerprints', () => {
+  const root = makeProject();
+  try {
+    for (const relativePath of SHARED_NATIVE_INPUTS) {
+      const iosBefore = nativeBuildFingerprint(root, 'ios');
+      const androidBefore = nativeBuildFingerprint(root, 'android');
+      fs.appendFileSync(path.join(root, relativePath), '\nchanged\n');
+      assert.notEqual(
+        nativeBuildFingerprint(root, 'ios'),
+        iosBefore,
+        `${relativePath} did not invalidate iOS`
+      );
+      assert.notEqual(
+        nativeBuildFingerprint(root, 'android'),
+        androidBefore,
+        `${relativePath} did not invalidate Android`
+      );
+    }
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

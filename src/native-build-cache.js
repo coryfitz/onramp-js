@@ -136,6 +136,7 @@ function clearNativeBuildState(outputDir, platform) {
 }
 
 module.exports = {
+  SHARED_NATIVE_INPUTS,
   cachedNativeBuild,
   clearNativeBuildState,
   nativeBuildFingerprint,

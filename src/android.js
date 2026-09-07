@@ -2905,11 +2905,16 @@ async function launchPreparedAndroid(
 
 async function runAndroid(options) {
   const prepared = await prepareAndroidDevelopment(options);
-  return launchPreparedAndroid(prepared, {
+  const nativeBuildBaseline = {
+    android: nativeBuildFingerprint(prepared.outputDir, 'android'),
+  };
+  const metro = await launchPreparedAndroid(prepared, {
     metroPort: options.metroPort,
     metroStartingPort: options.metroStartingPort,
     rebuild: options.rebuild,
   });
+  metro.nativeBuildBaseline = nativeBuildBaseline;
+  return metro;
 }
 
 module.exports = {

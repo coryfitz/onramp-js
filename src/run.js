@@ -19,6 +19,26 @@ const {
 const { findExecutable, run } = require('./process');
 const { doctorWatchman } = require('./watchman');
 const { normalizeEnvironment, writeRuntimeConfig } = require('./environment');
+const { startNativeBuildWatch } = require('./native-build-watch');
+const { nativeBuildFingerprint } = require('./native-build-cache');
+
+function monitorNativeBuildInputs(
+  outputDir,
+  platform,
+  session,
+  starter = startNativeBuildWatch
+) {
+  try {
+    return starter(outputDir, platform, session, {
+      initialFingerprints: session && session.nativeBuildBaseline,
+    });
+  } catch (error) {
+    console.warn(
+      `Warning: OnRamp could not monitor native build inputs: ${error.message}`
+    );
+    return null;
+  }
+}
 
 function nodeVersionTuple() {
   return process.versions.node
@@ -105,6 +125,11 @@ async function runMobile(options, runners = {
     preparationOptions
   );
   console.log('✓ Mobile prerequisites are ready');
+  const outputDir = path.resolve(options.output || process.cwd());
+  const nativeBuildBaseline = {
+    android: nativeBuildFingerprint(outputDir, 'android'),
+    ios: nativeBuildFingerprint(outputDir, 'ios'),
+  };
 
   let androidMetro;
   try {
@@ -144,7 +169,11 @@ async function runMobile(options, runners = {
         platform,
       });
     }
-    return { android: androidMetro, ios: iosMetro };
+    return {
+      android: androidMetro,
+      ios: iosMetro,
+      nativeBuildBaseline,
+    };
   } catch (error) {
     if (androidMetro) {
       androidMetro.stop('SIGTERM');
@@ -153,20 +182,34 @@ async function runMobile(options, runners = {
   }
 }
 
-async function runFrontend({
-  platform,
-  name,
-  output,
-  metroPort,
-  rebuild,
-  watchDiagnostics,
-  environment,
-}) {
+async function runFrontend(
+  {
+    platform,
+    name,
+    output,
+    metroPort,
+    rebuild,
+    watchDiagnostics,
+    environment,
+  },
+  dependencies = {}
+) {
+  const doctorWebForRun = dependencies.doctorWeb || doctorWeb;
+  const monitorNativeBuildInputsForRun = (
+    dependencies.monitorNativeBuildInputs || monitorNativeBuildInputs
+  );
+  const runAndroidForRun = dependencies.runAndroid || runAndroid;
+  const runIosForRun = dependencies.runIos || runIos;
+  const runMobileForRun = dependencies.runMobile || runMobile;
+  const runWebForRun = dependencies.runWeb || runWeb;
+  const writeRuntimeConfigForRun = (
+    dependencies.writeRuntimeConfig || writeRuntimeConfig
+  );
   const outputDir = path.resolve(output || process.cwd());
   requireFrontend(outputDir);
-  doctorWeb();
+  doctorWebForRun();
   const selectedEnvironment = normalizeEnvironment(environment);
-  writeRuntimeConfig(outputDir, selectedEnvironment, platform);
+  writeRuntimeConfigForRun(outputDir, selectedEnvironment, platform);
   process.env.ONRAMP_ENVIRONMENT = selectedEnvironment;
 
   if (platform === 'web') {
@@ -179,11 +222,11 @@ async function runFrontend({
     if (rebuild) {
       throw new Error('--rebuild is only valid for iOS, Android, or mobile runs.');
     }
-    runWeb(outputDir);
+    runWebForRun(outputDir);
     return;
   }
   if (platform === 'ios') {
-    await runIos({
+    const session = await runIosForRun({
       name,
       output: outputDir,
       metroPort,
@@ -191,10 +234,11 @@ async function runFrontend({
       watchDiagnostics,
       environment: selectedEnvironment,
     });
+    monitorNativeBuildInputsForRun(outputDir, platform, session);
     return;
   }
   if (platform === 'android') {
-    await runAndroid({
+    const session = await runAndroidForRun({
       name,
       output: outputDir,
       metroPort,
@@ -202,10 +246,11 @@ async function runFrontend({
       watchDiagnostics,
       environment: selectedEnvironment,
     });
+    monitorNativeBuildInputsForRun(outputDir, platform, session);
     return;
   }
   if (platform === 'mobile') {
-    await runMobile({
+    const session = await runMobileForRun({
       name,
       output: outputDir,
       metroPort,
@@ -213,6 +258,7 @@ async function runFrontend({
       watchDiagnostics,
       environment: selectedEnvironment,
     });
+    monitorNativeBuildInputsForRun(outputDir, platform, session);
     return;
   }
   throw new Error('Run platform must be web, ios, android, or mobile.');
@@ -230,6 +276,7 @@ async function repairFrontend({ platform, name, output, fresh = false }) {
 module.exports = {
   doctor,
   doctorWeb,
+  monitorNativeBuildInputs,
   repairFrontend,
   runFrontend,
   runMobile,

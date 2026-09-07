@@ -123,8 +123,11 @@ After one successful native build, later runs reuse the installed app when
 `app.json`, package metadata, dependency locks, and that platform's native
 project are unchanged. JavaScript and TypeScript changes still come from the
 new project-owned Metro server, so this skips only redundant compilation and
-installation. Force the full native path after an external tool changes the
-installed app or while diagnosing build behavior:
+installation. If one of those native inputs changes during an active run,
+OnRamp warns that Fast Refresh cannot link the change into the installed app
+and asks you to stop and rerun the same command. The rerun automatically
+rebuilds only the affected native app. Force the full native path after an
+external tool changes the installed app or while diagnosing build behavior:
 
 ```sh
 npx onramp-js run mobile --rebuild

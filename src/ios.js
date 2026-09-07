@@ -1404,10 +1404,15 @@ async function launchPreparedIos(
 
 async function runIos(options) {
   const prepared = await prepareIosDevelopment(options);
-  return launchPreparedIos(prepared, {
+  const nativeBuildBaseline = {
+    ios: nativeBuildFingerprint(prepared.outputDir, 'ios'),
+  };
+  const metro = await launchPreparedIos(prepared, {
     metroPort: options.metroPort,
     rebuild: options.rebuild,
   });
+  metro.nativeBuildBaseline = nativeBuildBaseline;
+  return metro;
 }
 
 async function repairIos({ name, output, fresh = false }) {
