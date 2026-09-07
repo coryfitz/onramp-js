@@ -180,7 +180,19 @@ test('reports download progress and extraction for Android CLI installs', async 
   const stream = {
     isTTY: false,
     write: chunk => {
-      output.push(String(chunk));
+      const rendered = String(chunk);
+      output.push(rendered);
+      // Acknowledge observed stages instead of assuming a busy test runner
+      // will sample an 80ms extraction window before the child exits.
+      if (rendered.includes('https://dl.google.com/android/repository/image.zip')) {
+        fs.writeFileSync(path.join(temporary, 'start-download'), 'ready');
+      }
+      if (/\]\s+25%/.test(rendered)) {
+        fs.writeFileSync(path.join(temporary, 'download-observed'), 'ready');
+      }
+      if (rendered.includes('100% Downloaded; extracting Android SDK package')) {
+        fs.writeFileSync(path.join(temporary, 'extraction-observed'), 'ready');
+      }
       return true;
     },
   };
@@ -190,21 +202,28 @@ test('reports download progress and extraction for Android CLI installs', async 
     'const sdk = process.argv[1];',
     "const archiveRoot = path.join(sdk, '.sdk', 'arch');",
     "const extractRoot = path.join(sdk, '.sdk', 'unzips', 'image');",
+    'function waitForSignal(name, next) {',
+    '  const deadline = setTimeout(() => process.exit(2), 15000);',
+    '  const poll = setInterval(() => {',
+    '    if (!fs.existsSync(path.join(sdk, name))) return;',
+    '    clearInterval(poll);',
+    '    clearTimeout(deadline);',
+    '    next();',
+    '  }, 5);',
+    '}',
     'fs.mkdirSync(archiveRoot, { recursive: true });',
     "console.log('https://dl.google.com/android/repository/image.zip...');",
-    'let size = 0;',
-    'const timer = setInterval(() => {',
-    '  size += 25;',
-    "  fs.writeFileSync(path.join(archiveRoot, 'image'), Buffer.alloc(size));",
-    '  if (size === 100) {',
-    '    clearInterval(timer);',
-    '    setTimeout(() => {',
-    '      fs.mkdirSync(extractRoot, { recursive: true });',
-    "      fs.writeFileSync(path.join(extractRoot, 'system.img'), Buffer.alloc(10));",
-    '      setTimeout(() => process.exit(0), 80);',
-    '    }, 20);',
-    '  }',
-    '}, 20);',
+    "waitForSignal('start-download', () => {",
+    "  fs.writeFileSync(path.join(archiveRoot, 'image'), Buffer.alloc(25));",
+    "  console.log('Downloading archive');",
+    "  waitForSignal('download-observed', () => {",
+    "    fs.writeFileSync(path.join(archiveRoot, 'image'), Buffer.alloc(100));",
+    '    fs.mkdirSync(extractRoot, { recursive: true });',
+    "    fs.writeFileSync(path.join(extractRoot, 'system.img'), Buffer.alloc(10));",
+    "    console.log('Extracting archive');",
+    "    waitForSignal('extraction-observed', () => process.exit(0));",
+    '  });',
+    '});',
   ].join('\n');
 
   await runAndroidSdkInstall(

@@ -25,6 +25,7 @@ import {
   usesCookieSession,
 } from './auth-storage';
 import {useRuntimeConfig} from './RuntimeConfig';
+import {clearAllNotificationContacts} from './notification-storage';
 
 interface AccountContextValue {
   account: OnRampAccount | null;
@@ -116,7 +117,7 @@ export function AccountProvider({children}: {children: React.ReactNode}) {
     const response = await deleteRemoteAccount(context, code);
     setAccount(null);
     setSessionToken(null);
-    await removeAccountSession();
+    await Promise.all([removeAccountSession(), clearAllNotificationContacts()]);
     return response.anonymized_subscriptions;
   }, [context]);
 
@@ -150,3 +151,4 @@ export function useAccount() {
 }
 
 export * from './auth-client';
+export * from './notification-storage';

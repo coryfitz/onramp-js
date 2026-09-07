@@ -99,6 +99,11 @@ test('synchronizes declarative identity, versions, and icons idempotently', t =>
   assert.match(androidGradle, /applicationId "com\.swerve\.predict"/);
   assert.match(androidGradle, /versionCode 7/);
   assert.match(androidGradle, /versionName "1\.2\.3"/);
+  assert.equal([...androidGradle.matchAll(/apply from: rootProject\.file\("onramp-release-signing\.gradle"\)/g)].length, 1);
+  assert.equal(
+    fs.readFileSync(path.join(root, 'android', 'onramp-release-signing.gradle'), 'utf8'),
+    fs.readFileSync(path.join(__dirname, '..', 'src', 'android-release-signing.gradle'), 'utf8')
+  );
   assert.match(
     fs.readFileSync(path.join(root, 'android', 'settings.gradle'), 'utf8'),
     /rootProject\.name = 'SwervePredict'/
@@ -166,6 +171,64 @@ test('synchronizes declarative identity, versions, and icons idempotently', t =>
   ), 'utf8'));
   assert.equal(iconContents.images[0].filename, 'onramp-icon-1024.png');
   assert.equal(iconContents.images[0].size, '1024x1024');
+});
+
+test('preserves configuration-owned iOS display names across development and production sync', t => {
+  const root = createNativeProject(t);
+  const plist = path.join(root, 'ios', 'SwervePredict', 'Info.plist');
+  for (const expression of ['$(APP_DISPLAY_NAME)', '${APP_DISPLAY_NAME}', '$(PRODUCT_NAME) Beta']) {
+    write(plist, `<plist><dict><key>CFBundleDisplayName</key><string>${expression}</string></dict></plist>\n`);
+    const config = prepareNativeConfig(root, 'swerve-predict');
+    syncNativeProjects(root, {...config, displayName: 'Swerve Predict Dev'}, ['ios']);
+    assert.ok(fs.readFileSync(plist, 'utf8').includes(`<string>${expression}</string>`));
+    syncNativeProjects(root, {...config, displayName: 'Swerve Predict'}, ['ios']);
+    assert.ok(fs.readFileSync(plist, 'utf8').includes(`<string>${expression}</string>`));
+  }
+});
+
+test('keeps the shared iOS launch screen free of the last development profile suffix', t => {
+  const root = createNativeProject(t);
+  const appJsonPath = path.join(root, 'app.json');
+  const appJson = JSON.parse(fs.readFileSync(appJsonPath, 'utf8'));
+  appJson.environments = {development: {displayNameSuffix: ' Dev'}};
+  write(appJsonPath, JSON.stringify(appJson));
+  const config = prepareNativeConfig(root, 'swerve-predict', 'development');
+  assert.equal(config.baseDisplayName, 'Swerve & Predict');
+  assert.equal(config.displayName, 'Swerve & Predict Dev');
+  syncNativeProjects(root, config, ['ios']);
+  const launchScreen = fs.readFileSync(path.join(root, 'ios', 'SwervePredict', 'LaunchScreen.storyboard'), 'utf8');
+  assert.match(launchScreen, /text="Swerve &amp; Predict"/);
+  assert.doesNotMatch(launchScreen, / Dev/);
+  assert.match(fs.readFileSync(path.join(root, 'ios', 'SwervePredict', 'Info.plist'), 'utf8'), /Swerve &amp; Predict Dev/);
+  assert.deepEqual(syncNativeProjects(root, config, ['ios']), []);
+});
+
+test('adds the release signing guard without replacing custom Android build types or credentials', t => {
+  const root = createNativeProject(t);
+  const gradlePath = path.join(root, 'android', 'app', 'build.gradle');
+  const original = fs.readFileSync(gradlePath, 'utf8') + `
+android {
+    signingConfigs { customUpload { keyAlias providers.environmentVariable("MY_KEY_ALIAS").orNull } }
+    buildTypes {
+        debug { signingConfig signingConfigs.debug }
+        release { signingConfig signingConfigs.customUpload }
+    }
+}
+`;
+  write(gradlePath, original);
+  const config = prepareNativeConfig(root, 'swerve-predict');
+  syncNativeProjects(root, config, ['android']);
+  const updated = fs.readFileSync(gradlePath, 'utf8');
+  assert.ok(updated.includes('release { signingConfig signingConfigs.customUpload }'));
+  assert.ok(updated.includes('debug { signingConfig signingConfigs.debug }'));
+  assert.ok(updated.includes('keyAlias providers.environmentVariable("MY_KEY_ALIAS").orNull'));
+  assert.deepEqual(syncNativeProjects(root, config, ['android']), []);
+  const script = fs.readFileSync(path.join(root, 'android', 'onramp-release-signing.gradle'), 'utf8');
+  assert.ok(script.includes('variant.preBuildProvider.configure { dependsOn(verifySigning) }'));
+  assert.ok(script.includes('onrampMissingSigning.size() == 4'));
+  assert.ok(script.includes('config.keyAlias?.equalsIgnoreCase("androiddebugkey")'));
+  assert.ok(script.includes('ONRAMP_ANDROID_ALLOW_UNSIGNED_RELEASE'));
+  assert.doesNotMatch(script, /storePassword\s*[= ]\s*["']android["']/);
 });
 
 test('rejects unsafe or invalid declarative native settings', t => {

@@ -1,0 +1,75 @@
+// Managed by OnRamp. Configure signing outside source control, not in this file.
+// Environment variables take precedence over Gradle properties with the same name.
+def onrampSigningValue = { String name ->
+    def value = providers.environmentVariable(name).orNull
+    if (value == null) value = providers.gradleProperty(name).orNull
+    return value
+}
+def onrampSigningNames = [
+    "ONRAMP_ANDROID_KEYSTORE",
+    "ONRAMP_ANDROID_STORE_PASSWORD",
+    "ONRAMP_ANDROID_KEY_ALIAS",
+    "ONRAMP_ANDROID_KEY_PASSWORD",
+]
+def onrampSigningValues = onrampSigningNames.collectEntries { name ->
+    [(name): onrampSigningValue(name)]
+}
+def onrampMissingSigning = onrampSigningNames.findAll { name ->
+    !onrampSigningValues[name]?.trim()
+}
+def onrampAllowUnsigned = onrampSigningValue("ONRAMP_ANDROID_ALLOW_UNSIGNED_RELEASE") == "true"
+def onrampReleaseSigning = android.signingConfigs.maybeCreate("onrampRelease")
+if (onrampMissingSigning.isEmpty()) {
+    onrampReleaseSigning.storeFile = file(onrampSigningValues.ONRAMP_ANDROID_KEYSTORE)
+    onrampReleaseSigning.storePassword = onrampSigningValues.ONRAMP_ANDROID_STORE_PASSWORD
+    onrampReleaseSigning.keyAlias = onrampSigningValues.ONRAMP_ANDROID_KEY_ALIAS
+    onrampReleaseSigning.keyPassword = onrampSigningValues.ONRAMP_ANDROID_KEY_PASSWORD
+}
+
+def onrampIsDebugSigning = { config ->
+    config != null && (
+        config.name == "debug" ||
+        config.keyAlias?.equalsIgnoreCase("androiddebugkey") ||
+        (config.storeFile != null && android.signingConfigs.debug.storeFile != null &&
+            config.storeFile.canonicalFile == android.signingConfigs.debug.storeFile.canonicalFile)
+    )
+}
+android.buildTypes.configureEach { buildType ->
+    if (!buildType.debuggable || buildType.name == "release") {
+        // Preserve an app's explicit custom signer. Replace only the upstream
+        // template's debug signer or a previously installed OnRamp signer.
+        def current = buildType.signingConfig
+        if (current == null || onrampIsDebugSigning(current) || current.name == "onrampRelease") {
+            buildType.signingConfig = onrampAllowUnsigned && onrampMissingSigning.size() == 4
+                ? null : onrampReleaseSigning
+        }
+    }
+}
+
+android.applicationVariants.all { variant ->
+    if (!variant.buildType.debuggable || variant.buildType.name == "release") {
+        def taskSuffix = variant.name.capitalize()
+        def verifySigning = tasks.register("verify${taskSuffix}OnRampSigning") {
+            group = "verification"
+            description = "Reject missing or debug signing for ${variant.name}; never prints secrets."
+            doLast {
+                def config = variant.signingConfig
+                if (onrampIsDebugSigning(config)) {
+                    throw new GradleException("OnRamp refuses to sign ${variant.name} with the Android debug key.")
+                }
+                if (config == null && onrampAllowUnsigned && onrampMissingSigning.size() == 4) {
+                    logger.warn("OnRamp: explicitly building UNSIGNED ${variant.name} for local validation only; it cannot be installed or uploaded to an app store.")
+                    return
+                }
+                if (config == null || (config.name == "onrampRelease" && !onrampMissingSigning.isEmpty())) {
+                    throw new GradleException("OnRamp ${variant.name} requires an upload key. Set ONRAMP_ANDROID_KEYSTORE, ONRAMP_ANDROID_STORE_PASSWORD, ONRAMP_ANDROID_KEY_ALIAS, and ONRAMP_ANDROID_KEY_PASSWORD in your environment or private user Gradle properties. Never commit signing secrets. For an unsigned local-only build, leave all four unset and explicitly set ONRAMP_ANDROID_ALLOW_UNSIGNED_RELEASE=true.")
+                }
+                if (config.storeFile == null || !config.storeFile.isFile() ||
+                    !config.storePassword || !config.keyAlias || !config.keyPassword) {
+                    throw new GradleException("OnRamp ${variant.name} upload signing is incomplete or the keystore is missing. Check your private signing configuration.")
+                }
+            }
+        }
+        variant.preBuildProvider.configure { dependsOn(verifySigning) }
+    }
+}

@@ -21,10 +21,41 @@ export class OnRampApiError extends Error {
   }
 }
 
-interface ApiContext {
+export interface ApiContext {
   apiBaseUrl: string;
   sessionToken?: string | null;
   cookieSession?: boolean;
+  /** Verified-email capability used only for notification intake and revocation. */
+  notificationToken?: string | null;
+  /** Opt in to receiving a reusable notification capability after email proof. */
+  rememberEmail?: boolean;
+  /** Client deadline; defaults above OnRamp's 15-second email-provider limit. */
+  requestTimeoutMs?: number;
+}
+
+export interface NotificationSubscriptionResponse {
+  subscription_id: string;
+  status: 'verified' | 'unverified';
+  verification_required: boolean;
+  demand_eligible: boolean;
+  suppressed?: boolean;
+  /** Proof-gated URL for reviewing or cancelling this one notification. */
+  unsubscribe_url?: string;
+  unsubscribe_path?: string;
+}
+
+export interface VerifiedNotificationSubscriptionResponse {
+  subscription_id: string;
+  status: 'verified';
+  verified: true;
+  demand_eligible: boolean;
+  /** URL for reviewing or cancelling this one notification. */
+  unsubscribe_url: string;
+  unsubscribe_path: string;
+  /** Present only when remembered-email reuse was requested and granted. */
+  notification_token?: string;
+  /** Explicit null means no scheduled expiry; absence means no remembered proof. */
+  notification_token_expires_at?: string | null;
 }
 
 function endpoint(context: ApiContext, path: string) {
@@ -39,27 +70,48 @@ async function request<T>(
   path: string,
   method = 'GET',
   body?: Record<string, unknown>,
+  notificationCapability = false,
 ): Promise<T> {
   const headers: Record<string, string> = {Accept: 'application/json'};
   if (body) headers['Content-Type'] = 'application/json';
   if (context.sessionToken) {
     headers.Authorization = `Bearer ${context.sessionToken}`;
   }
-  const response = await fetch(endpoint(context, path), {
-    method,
-    headers,
-    body: body ? JSON.stringify(body) : undefined,
-    credentials: context.cookieSession ? 'include' : 'same-origin',
-  });
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    throw new OnRampApiError(
-      payload.error || `Request failed (${response.status})`,
-      response.status,
-      payload.code,
-    );
+  if (notificationCapability && context.notificationToken) {
+    headers['X-OnRamp-Notification-Token'] = context.notificationToken;
   }
-  return payload as T;
+  const controller = new AbortController();
+  const timeoutMs = context.requestTimeoutMs ?? 25_000;
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(endpoint(context, path), {
+      method,
+      headers,
+      body: body ? JSON.stringify(body) : undefined,
+      credentials: context.cookieSession ? 'include' : 'same-origin',
+      signal: controller.signal,
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new OnRampApiError(
+        payload.error || `Request failed (${response.status})`,
+        response.status,
+        payload.code,
+      );
+    }
+    return payload as T;
+  } catch (error) {
+    if (error instanceof Error && error.name === 'AbortError') {
+      throw new OnRampApiError(
+        'The request timed out. Check your connection and try again.',
+        408,
+        'request_timeout',
+      );
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 export function requestAccountCode(
@@ -130,20 +182,21 @@ export function requestNotificationSubscription(
     appVersion?: string;
   },
 ) {
-  return request<{
-    subscription_id: string;
-    status: 'verified' | 'unverified';
-    verification_required: boolean;
-    demand_eligible: boolean;
-  }>(context, '/api/notifications/subscriptions', 'POST', {
-    resource_type: input.resourceType,
-    resource_id: input.resourceId,
-    resource_title: input.resourceTitle,
-    source: input.source || 'app',
-    metadata: input.metadata || {},
-    email: input.email,
-    app_version: input.appVersion,
-  });
+  return request<NotificationSubscriptionResponse>(
+    context,
+    '/api/notifications/subscriptions',
+    'POST',
+    {
+      resource_type: input.resourceType,
+      resource_id: input.resourceId,
+      resource_title: input.resourceTitle,
+      source: input.source || 'app',
+      metadata: input.metadata || {},
+      email: input.email,
+      app_version: input.appVersion,
+    },
+    true,
+  );
 }
 
 export function verifyNotificationSubscription(
@@ -152,15 +205,26 @@ export function verifyNotificationSubscription(
   email: string,
   code: string,
 ) {
-  return request<{
-    subscription_id: string;
-    status: 'verified';
-    verified: true;
-    demand_eligible: boolean;
-  }>(
+  return request<VerifiedNotificationSubscriptionResponse>(
     context,
     '/api/notifications/subscriptions/verify',
     'POST',
-    {subscription_id: subscriptionId, email, code},
+    {
+      subscription_id: subscriptionId,
+      email,
+      code,
+      ...(context.rememberEmail === true ? {remember_email: true} : {}),
+    },
+  );
+}
+
+/** Revoke this remembered-email capability; existing subscriptions remain. */
+export function revokeNotificationContact(context: ApiContext) {
+  return request<{revoked: true}>(
+    context,
+    '/api/notifications/contact/revoke',
+    'POST',
+    undefined,
+    true,
   );
 }

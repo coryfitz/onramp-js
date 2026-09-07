@@ -3,6 +3,13 @@ dist/
 *.log
 .DS_Store
 
+# Upload signing material belongs outside source control.
+*.jks
+*.keystore
+!android/app/debug.keystore
+*.p12
+*.mobileprovision
+
 # Generated runtime and platform route registries
 src/generated/runtime-config.json
 src/generated/routes.android.ts

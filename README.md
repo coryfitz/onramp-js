@@ -82,6 +82,40 @@ the example reverse-domain identifiers to identifiers controlled by the app
 owner before distribution. Native-safe `name` and human-facing `displayName`
 remain separate, so names such as `MyApp` display as “My App”.
 
+An iOS `CFBundleDisplayName` that explicitly uses an Xcode build-setting
+expression, for example `$(APP_DISPLAY_NAME)`, is app-owned and preserved.
+Define that setting in **every** app configuration (Debug, Release, and any
+Staging configuration); this keeps a development launch from renaming the
+production archive. Plain generated display names still follow `app.json`.
+The shared iOS launch storyboard uses the unsuffixed base brand, since it is
+bundled into every configuration and cannot follow the last development run.
+
+### Android release signing
+
+OnRamp installs `android/onramp-release-signing.gradle` on native add/run for
+new and existing apps. Non-debuggable variants (and Release) must have a real
+upload signer; the React Native template's debug signer is never a production
+fallback. Debug emulator builds are unchanged. An app's explicit custom
+non-debug signing configuration is preserved and checked for completeness.
+
+Set these values in the environment or private user Gradle properties, **not**
+the repository's `gradle.properties` (environment values take precedence):
+
+- `ONRAMP_ANDROID_KEYSTORE`: preferably an absolute path outside the repository.
+- `ONRAMP_ANDROID_STORE_PASSWORD`: the keystore password.
+- `ONRAMP_ANDROID_KEY_ALIAS`: the upload-key alias.
+- `ONRAMP_ANDROID_KEY_PASSWORD`: the key password.
+
+Do not pass passwords on command lines or commit keys. OnRamp does not generate
+keys or contact an app store. Owner-controlled upload keys and Play App Signing
+still need to be configured before distribution.
+
+For a **local-only unsigned** release build, leave all four settings unset and
+explicitly set `ONRAMP_ANDROID_ALLOW_UNSIGNED_RELEASE=true` while running the
+Gradle release task. The artifact is not installable or uploadable. Partial
+signing configuration still fails; the flag never selects a debug signer and
+does not override an app's custom signer. Keep this opt-in out of release CI.
+
 ## Check and run platforms
 
 `doctor` checks the required development tools without changing the app:
@@ -364,6 +398,42 @@ JSON counterparts from `onramp-js/secure-storage`. The adapter uses
 `WHEN_UNLOCKED_THIS_DEVICE_ONLY` on iOS without enabling iCloud synchronization
 and requires Android Keystore-backed `SECURE_SOFTWARE` storage. It intentionally
 rejects web use rather than silently placing secrets in browser storage.
+
+### Remembered notification email without an account
+
+`onramp-js/auth` supports an explicitly opted-in verified email for later
+notification requests. Set `rememberEmail: true` in the API context passed to
+`verifyNotificationSubscription`. When verification returns both
+`notification_token` and `notification_token_expires_at`, save them with
+`saveNotificationContact(apiBaseUrl, {email, token, expiresAt})`. An explicit
+`null` expiry means the capability has no scheduled expiry; a finite timestamp
+supports a custom backend policy. Missing or malformed expiry metadata must
+not be treated as remembered proof.
+
+`getNotificationContact(apiBaseUrl)` restores a valid contact or returns `null`.
+Pass its token as `notificationToken` to `requestNotificationSubscription`.
+The SDK sends `X-OnRamp-Notification-Token` only for subscription intake and
+`revokeNotificationContact`; it never sends that capability to account endpoints
+or code verification, and it does not create an account session. A backend
+`OnRampApiError` with status `401` and code `notification_token_invalid` means
+the app should clear the saved contact and request fresh email verification.
+
+Native contacts use the device-only secure-storage adapter above. They are
+scoped by the normalized full backend URL, including its path, so distinct
+environments do not share a contact. Malformed records are removed on read.
+Well-formed records remain available until cleared, including legacy records
+with finite dates: only the backend decides whether a capability is valid,
+expired under a custom policy, or revoked. Device clocks never force fresh
+verification. Web support keeps contacts only in page memory and does not
+retain bearer capabilities in browser storage.
+
+`revokeNotificationContact({apiBaseUrl, notificationToken})` revokes reuse on the
+backend and is idempotent. `clearNotificationContact(apiBaseUrl)` removes one
+local contact; `clearAllNotificationContacts()` removes all local contacts.
+Apps should revoke when forgetting an email and clear local storage even if the
+network is unavailable. Revocation and local removal leave existing notification
+subscriptions unchanged. Successful account deletion through `AccountProvider`
+also clears all locally remembered notification contacts.
 
 ## OnRamp Python integration
 

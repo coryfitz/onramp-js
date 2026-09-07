@@ -206,6 +206,7 @@ function prepareNativeConfig(outputDir, requestedName, environment = null) {
       package: androidPackage ? `${androidPackage}${profile.identifierSuffix}` : null,
       versionCode: androidVersionCode,
     },
+    baseDisplayName: displayName,
     displayName: `${displayName}${profile.displayNameSuffix}`,
     icon,
     ios: {
@@ -336,6 +337,14 @@ function syncAndroidMetadata(outputDir, config) {
       'the Android version name'
     );
   }
+  const signingScript = 'onramp-release-signing.gradle';
+  if (!/apply\s+from\s*:\s*rootProject\.file\(["']onramp-release-signing\.gradle["']\)/.test(buildGradle)) {
+    buildGradle = `${buildGradle.trimEnd()}\n\n// Keep release signing separate from development credentials.\napply from: rootProject.file("${signingScript}")\n`;
+  }
+  changed = copyIfChanged(
+    path.join(__dirname, 'android-release-signing.gradle'),
+    path.join(androidRoot, signingScript)
+  ) || changed;
   changed = writeIfChanged(buildGradlePath, buildGradle) || changed;
   syncAndroidSourcePackage(androidRoot, oldPackage, config.android.package);
 
@@ -446,10 +455,17 @@ function syncIosMetadata(outputDir, config) {
   changed = writeIfChanged(projectPath, project) || changed;
 
   let infoPlist = fs.readFileSync(infoPlistPath, 'utf8');
+  const displayName = infoPlist.match(
+    /<key>CFBundleDisplayName<\/key>\s*<string>([\s\S]*?)<\/string>/
+  )?.[1];
+  // An app can own per-configuration names through Xcode build settings.
+  // Replacing that expression with the last development profile would rename
+  // its App Store archive as well. Plain generated names remain synchronized.
+  const usesBuildSetting = /\$\([A-Za-z_][A-Za-z0-9_]*\)|\$\{[A-Za-z_][A-Za-z0-9_]*\}/.test(displayName || '');
   infoPlist = replaceRequired(
     infoPlist,
     /(<key>CFBundleDisplayName<\/key>\s*<string>)[\s\S]*?(<\/string>)/,
-    `$1${escapeXml(config.displayName)}$2`,
+    (_match, prefix, suffix) => `${prefix}${usesBuildSetting ? displayName : escapeXml(config.displayName)}${suffix}`,
     'the iOS display name'
   );
   changed = writeIfChanged(infoPlistPath, infoPlist) || changed;
@@ -459,7 +475,7 @@ function syncIosMetadata(outputDir, config) {
     const launchScreen = fs.readFileSync(launchScreenPath, 'utf8');
     const updatedLaunchScreen = launchScreen.replace(
       /(<label\b[^>]*\btext=")[^"]*("[^>]*\bid="GJd-Yh-RWb"[^>]*>)/,
-      `$1${escapeXml(config.displayName)}$2`
+      `$1${escapeXml(config.baseDisplayName || config.displayName)}$2`
     );
     changed = writeIfChanged(launchScreenPath, updatedLaunchScreen) || changed;
   }
