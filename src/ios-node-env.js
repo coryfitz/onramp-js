@@ -20,7 +20,13 @@ function syncIosNodeEnvironment(iosDir, nodeBinary = process.execPath) {
     throw new Error('The selected Node executable must be an absolute, single-line path.');
   }
   const file = path.join(iosDir, '.xcode.env.local');
-  if (fs.existsSync(file) && fs.lstatSync(file).isSymbolicLink()) {
+  let stat;
+  try {
+    stat = fs.lstatSync(file);
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+  }
+  if (stat?.isSymbolicLink()) {
     return {changed: false, preservedCustom: true};
   }
   const current = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '';

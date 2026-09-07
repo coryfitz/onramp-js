@@ -73,6 +73,10 @@ test('does not follow linked local Xcode configuration or accept executable-path
   fs.symlinkSync(target, file);
   assert.deepEqual(syncIosNodeEnvironment(root, '/selected/node'), {changed: false, preservedCustom: true});
   assert.equal(fs.readFileSync(target, 'utf8'), 'export NODE_BINARY=/old/node\n');
+  fs.renameSync(target, path.join(root, 'saved.env'));
+  assert.deepEqual(syncIosNodeEnvironment(root, '/selected/node'), {changed: false, preservedCustom: true});
+  assert.equal(fs.existsSync(target), false);
+  assert.equal(fs.lstatSync(file).isSymbolicLink(), true);
 });
 
 test('refreshes the Node pin even when the CocoaPods lockfiles are already current', t => {
