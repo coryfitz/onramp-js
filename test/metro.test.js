@@ -49,6 +49,15 @@ function close(server) {
   });
 }
 
+function captureLogs(t) {
+  // Node 22 multiplexes raw stdout and serialized test events on one pipe;
+  // asynchronous CLI output can corrupt its framing (nodejs/node#64061).
+  // Capture and assert messages instead of sending them through that pipe.
+  const logs = [];
+  t.mock.method(console, 'log', message => { logs.push(message); });
+  return logs;
+}
+
 test('normalizes valid Metro ports and rejects invalid values', () => {
   assert.equal(normalizePort('8082'), 8082);
   assert.throws(() => normalizePort('0'), /between 1 and 65535/);
@@ -91,13 +100,15 @@ test('detects a macOS-style IPv6 wildcard listener', async t => {
   }
 });
 
-test('automatically advances past an occupied default port', async () => {
+test('automatically advances past an occupied default port', async t => {
+  const logs = captureLogs(t);
   const server = net.createServer();
   const occupiedPort = await listen(server);
   try {
     const selected = await selectMetroPort(undefined, occupiedPort);
     assert.ok(selected > occupiedPort);
     assert.equal(await isPortAvailable(selected), true);
+    assert.deepEqual(logs, [`Metro port ${occupiedPort} is in use; using ${selected}.`]);
   } finally {
     await close(server);
   }
@@ -114,11 +125,13 @@ test('builds the same lazy native bundle shape requested by React Native', () =>
   assert.throws(() => metroBundlePath('web'), /ios or android/);
 });
 
-test('waits for the complete Metro bundle before reporting readiness', async () => {
+test('waits for the complete Metro bundle before reporting readiness', async t => {
+  const logs = captureLogs(t);
   const server = http.createServer((request, response) => {
     const url = new URL(request.url, 'http://localhost');
     assert.equal(url.pathname, '/index.bundle');
     assert.equal(url.searchParams.get('platform'), 'ios');
+    assert.deepEqual(logs, ['Preparing the first ios bundle...']);
     response.writeHead(200, { 'Content-Type': 'application/javascript' });
     response.write('first');
     setTimeout(() => response.end('second'), 30);
@@ -132,12 +145,17 @@ test('waits for the complete Metro bundle before reporting readiness', async () 
   try {
     await warmMetroBundle({ port, platform: 'ios' });
     assert.equal(completed, true);
+    assert.deepEqual(logs, [
+      'Preparing the first ios bundle...',
+      '✓ First ios bundle is ready',
+    ]);
   } finally {
     await close(server);
   }
 });
 
-test('rejects a failed Metro bundle response with its status and detail', async () => {
+test('rejects a failed Metro bundle response with its status and detail', async t => {
+  const logs = captureLogs(t);
   const server = http.createServer((request, response) => {
     response.writeHead(500, { 'Content-Type': 'text/plain' });
     response.end('bundle generation failed');
@@ -149,6 +167,7 @@ test('rejects a failed Metro bundle response with its status and detail', async 
       warmMetroBundle({ port, platform: 'android' }),
       /HTTP 500.*bundle generation failed/
     );
+    assert.deepEqual(logs, ['Preparing the first android bundle...']);
   } finally {
     await close(server);
   }

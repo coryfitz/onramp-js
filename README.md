@@ -213,6 +213,15 @@ offering it. Changed Xcode or runtime metadata is checked immediately. If Xcode
 itself is missing, OnRamp can open its Mac App Store page
 after asking; Apple still requires the user to complete the Xcode installation.
 
+Add `--force` to `run ios`, `run android`, or `run mobile` to accept emulator
+updates automatically for that run. It covers iOS runtime versions/builds,
+the Android Emulator package, and Android system-image versions/revisions,
+including creating a new AVD required by an image upgrade. Downloads can be
+several GB. It does not skip update checks, force an app rebuild (`--rebuild`),
+or bypass compatibility checks or rejected-download cooldowns. First installs,
+architecture repairs, display-only replacements, and cleanup still ask for
+confirmation; normal runs without the flag keep all existing prompts.
+
 After verifying a newly installed iOS runtime, OnRamp offers to remove older
 idle runtimes through Xcode's runtime manager, showing their versions and
 approximate sizes. Removal requires separate confirmation because runtimes are
@@ -227,7 +236,8 @@ It offers to install or upgrade the Emulator package and to install the newest
 stable Google APIs system image and create a reusable AVD. If `sdkmanager` is
 missing or too old to run, OnRamp first offers to download verified current
 command-line tools from Google's repository. Downloads and SDK package changes
-require confirmation. After validating replacement command-line tools, OnRamp
+require confirmation unless an update was preapproved with `--force` as above.
+After validating replacement command-line tools, OnRamp
 automatically removes strictly older copies in its own `onramp-*` tool
 directories; unrelated tools and same-version copies remain. When Google's
 installer prints only a download URL, OnRamp adds a byte-based progress bar
@@ -280,6 +290,37 @@ npx onramp-js repair ios
 
 The default repair preserves `Podfile.lock`. Add `--fresh` only when resolving
 a new native dependency lockfile is intentional.
+
+## Disposable mobile storage
+
+Native CLI launches run bounded maintenance at most daily. On macOS, verified
+Xcode DerivedData for deleted OnRamp temporary workspaces is eligible after
+seven idle days; current projects, shared caches, and any uncertain or active
+build state are kept. On all platforms, marked OnRamp scaffold/tool-install
+temporary directories are eligible after 24 hours only if the creator is
+definitely dead. Successful operations still remove their own temporary work
+immediately. Unmarked legacy directories and symlinks are never swept.
+
+```bash
+onramp-js storage --check
+onramp-js storage --clean
+```
+
+Inspection is the default. Cleanup does not remove emulator packages, system
+images, device app data, Pods, dependency downloads, source, upgrade backups,
+or current compiled apps. Add `--include-other-projects` explicitly to inspect
+or clean old Xcode output for other deleted workspaces; the seven-day and
+process/identity checks still apply. Removed output is not retained in Trash
+and must be regenerated if that deleted project is restored.
+
+Older-runtime/AVD/unused-image prompts also run when the newest replacement is
+already installed, not just immediately after an upgrade. Those prompts retain
+their separate data-loss/other-project warnings and are never accepted by
+`--force`. Maintenance is optional and cannot fail an otherwise valid launch.
+
+Contributors: keep the ownership-marker, PID, age, canonical-path, symlink,
+reinspection, and resource limits in `owned-temporary.js` and `xcode-storage.js`.
+Do not broaden the automatic collector into a generic cache purge.
 
 ## Upgrade an existing frontend
 

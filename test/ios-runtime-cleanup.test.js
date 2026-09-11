@@ -202,7 +202,7 @@ test('runtime inventory fails closed on provider errors and malformed schemas', 
   assert.throws(() => inspectIosRuntimeStorage(environment, () => ({ status: 0, stdout: '{' })));
 });
 
-test('only newly verified downloads trigger runtime cleanup, including fallback', async () => {
+test('verified new or already-installed preferred runtimes trigger cleanup, including fallback', async () => {
   const old = { identifier: oldRuntime, build: '22G86', version: '18.6' };
   for (const scenario of ['new', 'fallback', 'alternative', 'failed', 'unchanged', 'unknown', 'declined', 'already']) {
     const calls = [];
@@ -232,7 +232,8 @@ test('only newly verified downloads trigger runtime cleanup, including fallback'
     });
     const changed = ['new', 'fallback', 'alternative'].includes(scenario);
     assert.equal(result.changed, changed, scenario);
-    assert.deepEqual(calls, changed ? [actual] : [], scenario);
+    assert.deepEqual(calls, changed || scenario === 'already' ? [actual] : [], scenario);
+    if (scenario === 'already') assert.equal(downloads, 0);
   }
 });
 

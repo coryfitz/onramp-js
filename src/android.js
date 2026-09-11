@@ -2439,12 +2439,16 @@ async function prepareAndroidEnvironment(options = {}) {
     }
     packagesToInstall.add('emulator');
   } else if (androidPackageNeedsUpdate(emulatorPackage)) {
-    const approved = await ask(
+    const approved = options.forceEmulatorUpdates === true || await ask(
       'Android Emulator ' + emulatorPackage.availableVersion
       + ' is available; ' + emulatorPackage.installedVersion
       + ' is installed. Upgrade now? (y/N): '
     );
     if (approved) {
+      if (options.forceEmulatorUpdates === true) {
+        log('--force: accepting Android Emulator update to '
+          + emulatorPackage.availableVersion + '; the download may exceed 1 GB.');
+      }
       packagesToInstall.add('emulator');
     } else {
       log(
@@ -2579,6 +2583,50 @@ async function prepareAndroidEnvironment(options = {}) {
       || imageNeedsUpdate
     );
     const avdNeedsCreate = !matchingAvd;
+    const cleanupReplacement = async replacement => {
+      try {
+        const replacementMetadata = replacement
+          ? androidAvdMetadata(replacement, environment.sdk, environment.env)
+          : null;
+        if (
+          !replacementMetadata
+          || !replacementMetadata.valid
+          || !replacementMetadata.stable
+          || !replacementMetadata.display.sharp
+          || replacementMetadata.packagePath !== preferredImage.packageInfo.path
+        ) return;
+
+        // Reused replacements need the same cleanup opportunity as newly
+        // created ones. Neither update approval nor --force authorizes deletion.
+        await cleanupSupersededAndroidAvds({
+          avdManager: findAvdManager(environment.sdk, sdkManager),
+          replacement,
+          avds,
+          environment: { ...environment, adb },
+          promptYesNo: ask,
+          captureFn,
+          log,
+        });
+        await (options.cleanupSystemImages || cleanupSupersededAndroidSystemImages)({
+          sdkManager,
+          sdk: environment.sdk,
+          env: environment.env,
+          replacementPackagePath: replacementMetadata.packagePath,
+          promptYesNo: ask,
+          listPackagesFn: (manager, sdk, env) => (
+            (options.listPackages || listAndroidSdkPackages)(manager, sdk, env, captureFn)
+          ),
+          removePackagesFn: (manager, sdk, env, selected) => (
+            (options.removePackages || removeAndroidSdkPackages)(
+              manager, sdk, env, selected, runFn, { platform: options.platform }
+            )
+          ),
+          log,
+        });
+      } catch (error) {
+        log('Android storage cleanup skipped: ' + error.message);
+      }
+    };
 
     if (imageNeedsInstall || avdNeedsCreate) {
       const latestApi = preferredImage.api.join('.');
@@ -2628,8 +2676,18 @@ async function prepareAndroidEnvironment(options = {}) {
         );
       }
 
-      const approved = await ask(question);
+      // Only version/revision upgrades are preapproved. First installs,
+      // display-only replacements, repairs, and cleanup retain their prompts.
+      const forceImageUpdate = options.forceEmulatorUpdates === true
+        && Boolean(current)
+        && (imageNeedsUpdate
+          || compareVersions(preferredImage.api, androidAvdApi(current)) > 0);
+      const approved = forceImageUpdate || await ask(question);
       if (approved) {
+        if (forceImageUpdate) {
+          log('--force: accepting Android system image update to API '
+            + latestApi + '; the download can be several GB.');
+        }
         let replacement = matchingAvd ? matchingAvd.avd : null;
         if (imageNeedsInstall) {
           await (options.installPackages || installAndroidSdkPackages)(
@@ -2656,47 +2714,8 @@ async function prepareAndroidEnvironment(options = {}) {
             captureFn,
             log
           );
-          await cleanupSupersededAndroidAvds({
-            avdManager,
-            replacement,
-            avds,
-            environment: { ...environment, adb },
-            promptYesNo: ask,
-            captureFn,
-            log,
-          });
         }
-        try {
-          const replacementMetadata = replacement
-            ? androidAvdMetadata(replacement, environment.sdk, environment.env)
-            : null;
-          if (
-            replacementMetadata
-            && replacementMetadata.valid
-            && replacementMetadata.stable
-            && replacementMetadata.display.sharp
-            && replacementMetadata.packagePath === preferredImage.packageInfo.path
-          ) {
-            await cleanupSupersededAndroidSystemImages({
-              sdkManager,
-              sdk: environment.sdk,
-              env: environment.env,
-              replacementPackagePath: replacementMetadata.packagePath,
-              promptYesNo: ask,
-              listPackagesFn: (manager, sdk, env) => (
-                (options.listPackages || listAndroidSdkPackages)(manager, sdk, env, captureFn)
-              ),
-              removePackagesFn: (manager, sdk, env, selected) => (
-                (options.removePackages || removeAndroidSdkPackages)(
-                  manager, sdk, env, selected, runFn, { platform: options.platform }
-                )
-              ),
-              log,
-            });
-          }
-        } catch (error) {
-          log('Android image cleanup skipped: ' + error.message);
-        }
+        await cleanupReplacement(replacement);
       } else if (stableAvds.length > 0) {
         log(
           'Continuing with Android API '
@@ -2707,6 +2726,8 @@ async function prepareAndroidEnvironment(options = {}) {
           'Android launch cancelled; no usable virtual device is installed.'
         );
       }
+    } else {
+      await cleanupReplacement(matchingAvd.avd);
     }
   }
 
@@ -2791,11 +2812,12 @@ async function prepareAndroidDevelopment({
   name,
   output,
   watchDiagnostics = false,
+  forceEmulatorUpdates = false,
   environment: appEnvironment,
 }) {
   const outputDir = path.resolve(output || process.cwd());
   console.log('Preparing Android development...');
-  const environment = await prepareAndroidEnvironment();
+  const environment = await prepareAndroidEnvironment({ forceEmulatorUpdates });
   environment.env.ONRAMP_PLATFORM = 'android';
   if (watchDiagnostics) {
     environment.env.ONRAMP_WATCH_DIAGNOSTICS = '1';

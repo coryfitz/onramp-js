@@ -1,6 +1,6 @@
 const fs = require('fs');
-const os = require('os');
 const path = require('path');
+const { createOwnedTemporaryDirectory, removeOwnedTemporaryDirectory } = require('./owned-temporary');
 const {
   nativeProjectName,
   prepareNativeConfig,
@@ -86,7 +86,7 @@ async function addNativePlatforms({ platform, name, output, environment = null }
     return { nativeConfig, nativeName, added: [] };
   }
 
-  const temporaryRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'onramp-js-'));
+  const temporaryRoot = createOwnedTemporaryDirectory('native-project');
   const temporaryProject = path.join(temporaryRoot, 'project');
 
   try {
@@ -125,7 +125,7 @@ async function addNativePlatforms({ platform, name, output, environment = null }
       console.log(`✓ ${directory} project added (${nativeName})`);
     }
   } finally {
-    fs.rmSync(temporaryRoot, { recursive: true, force: true });
+    removeOwnedTemporaryDirectory(temporaryRoot);
   }
 
   const synchronized = syncNativeProjects(outputDir, nativeConfig, directories);

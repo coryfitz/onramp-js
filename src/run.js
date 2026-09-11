@@ -117,6 +117,7 @@ async function runMobile(options, runners = {
     output: options.output,
     watchDiagnostics: options.watchDiagnostics,
     environment: options.environment,
+    forceEmulatorUpdates: options.forceEmulatorUpdates,
   };
   const preparedAndroid = await runners.prepareAndroidDevelopment(
     preparationOptions
@@ -189,6 +190,7 @@ async function runFrontend(
     output,
     metroPort,
     rebuild,
+    forceEmulatorUpdates,
     watchDiagnostics,
     environment,
   },
@@ -206,8 +208,18 @@ async function runFrontend(
     dependencies.writeRuntimeConfig || writeRuntimeConfig
   );
   const outputDir = path.resolve(output || process.cwd());
+  if (forceEmulatorUpdates && !['ios', 'android', 'mobile'].includes(platform)) {
+    throw new Error('--force is only valid for iOS, Android, or mobile runs.');
+  }
   requireFrontend(outputDir);
   doctorWebForRun();
+  if (['ios', 'android', 'mobile'].includes(platform) && dependencies.maintainMobileStorage) {
+    try {
+      await dependencies.maintainMobileStorage();
+    } catch (_) {
+      console.warn('OnRamp storage maintenance was skipped; continuing with native launch.');
+    }
+  }
   const selectedEnvironment = normalizeEnvironment(environment);
   writeRuntimeConfigForRun(outputDir, selectedEnvironment, platform);
   process.env.ONRAMP_ENVIRONMENT = selectedEnvironment;
@@ -231,6 +243,7 @@ async function runFrontend(
       output: outputDir,
       metroPort,
       rebuild,
+      forceEmulatorUpdates,
       watchDiagnostics,
       environment: selectedEnvironment,
     });
@@ -243,6 +256,7 @@ async function runFrontend(
       output: outputDir,
       metroPort,
       rebuild,
+      forceEmulatorUpdates,
       watchDiagnostics,
       environment: selectedEnvironment,
     });
@@ -255,6 +269,7 @@ async function runFrontend(
       output: outputDir,
       metroPort,
       rebuild,
+      forceEmulatorUpdates,
       watchDiagnostics,
       environment: selectedEnvironment,
     });

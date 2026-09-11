@@ -102,6 +102,29 @@ test('keeps old tools when the download or replacement validation fails', async 
   }
 });
 
+test('owned command-line tool download staging is removed after success or failure', async t => {
+  for (const fail of [false, true]) {
+    const sdk = temporaryDirectory(t);
+    let staging;
+    const options = bootstrapFixture(sdk, {
+      downloadFn: async (_url, archive) => {
+        staging = path.dirname(archive);
+        const marker = JSON.parse(fs.readFileSync(
+          path.join(staging, '.onramp-temporary.json'), 'utf8'
+        ));
+        assert.equal(marker.kind, 'android-tools');
+        assert.equal(marker.pid, process.pid);
+        if (fail) throw new Error('test download failed');
+        fs.writeFileSync(archive, Buffer.from('fixture archive'));
+      },
+    });
+    if (fail) await assert.rejects(bootstrapAndroidCommandLineTools(options), /test download failed/);
+    else await bootstrapAndroidCommandLineTools(options);
+    assert.ok(staging);
+    assert.equal(fs.existsSync(staging), false);
+  }
+});
+
 test('refuses tool cleanup when the replacement redirects to an older install', t => {
   const sdk = temporaryDirectory(t);
   const old = makeTools(sdk, 'onramp-22.0');

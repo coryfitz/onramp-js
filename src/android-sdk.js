@@ -5,6 +5,7 @@ const os = require('os');
 const path = require('path');
 const { Readable } = require('stream');
 const { pipeline } = require('stream/promises');
+const { createOwnedTemporaryDirectory, removeOwnedTemporaryDirectory } = require('./owned-temporary');
 const {
   capture,
   isPythonWrapper,
@@ -426,9 +427,7 @@ async function bootstrapAndroidCommandLineTools({
     return null;
   }
 
-  const temporary = fs.mkdtempSync(
-    path.join(os.tmpdir(), 'onramp-android-tools-')
-  );
+  const temporary = createOwnedTemporaryDirectory('android-tools');
   try {
     const archive = path.join(temporary, 'command-line-tools.zip');
     const extracted = path.join(temporary, 'extracted');
@@ -496,7 +495,7 @@ async function bootstrapAndroidCommandLineTools({
     pruneOldAndroidCommandLineTools(sdk, sdkManager, { log });
     return sdkManager;
   } finally {
-    fs.rmSync(temporary, { recursive: true, force: true });
+    removeOwnedTemporaryDirectory(temporary);
   }
 }
 

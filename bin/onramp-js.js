@@ -6,6 +6,7 @@ const { normalizePort } = require('../src/metro');
 const { addNativePlatforms } = require('../src/native');
 const { doctor, doctorWeb, repairFrontend, runFrontend } = require('../src/run');
 const { upgradeFrontend } = require('../src/upgrade');
+const { automaticallyMaintainMobileStorage, runStorageCommand } = require('../src/storage');
 const packageJson = require('../package.json');
 
 function printUsage() {
@@ -14,7 +15,8 @@ function printUsage() {
   onramp-js create --name <app-name> --output <directory> [--mobile | --all]
   onramp-js add <ios | android | mobile> [--output <directory>]
   onramp-js doctor [web | ios | android | mobile | all]
-  onramp-js run <web | ios | android | mobile> [--output <directory>] [--environment <development | staging | production>] [--metro-port <port>] [--watch-diagnostics] [--rebuild]
+  onramp-js storage [--check | --clean] [--include-other-projects]
+  onramp-js run <web | ios | android | mobile> [--output <directory>] [--environment <development | staging | production>] [--metro-port <port>] [--watch-diagnostics] [--rebuild] [--force]
   onramp-js repair ios [--output <directory>] [--fresh]
   onramp-js upgrade [--output <directory>] [--check]
 
@@ -22,6 +24,7 @@ Commands:
   create    Create a web-ready universal OnRamp app
   add       Add native platform projects to an existing app
   doctor    Check the development tools for one or all platforms
+  storage   Inspect or remove abandoned disposable development output
   run       Prepare and run an app on the selected platform
   repair    Clean and restore platform dependencies
   upgrade   Safely upgrade framework-owned frontend tooling
@@ -33,8 +36,11 @@ Options:
   --environment  Select the development, staging, or production app profile
   --watch-diagnostics  Log source paths that can trigger native Fast Refresh
   --rebuild  Force a fresh native app build instead of reusing an unchanged installation
+  --force   Accept emulator updates for native runs; still ask before first installs or cleanup
   --fresh   Recreate Podfile.lock during an iOS repair
-  --check   Preview the frontend upgrade and report whether it can succeed
+  --check   Read-only upgrade or storage check
+  --clean   Remove eligible abandoned build output and owned temporary files
+  --include-other-projects  Also include old Xcode output for other deleted projects
   --help    Show this help
   --version Show the onramp-js version`);
 }
@@ -155,6 +161,13 @@ function parseRunArgs(args) {
       options.rebuild = true;
       continue;
     }
+    if (argument === '--force') {
+      if (!['ios', 'android', 'mobile'].includes(platform)) {
+        throw new Error('--force is only valid for iOS, Android, or mobile runs.');
+      }
+      options.forceEmulatorUpdates = true;
+      continue;
+    }
     throw new Error(`Unknown option: ${argument}`);
   }
 
@@ -189,6 +202,19 @@ function parseRepairArgs(args) {
   }
 
   options.output = path.resolve(options.output);
+  return options;
+}
+
+function parseStorageArgs(args) {
+  const options = { clean: false, includeOtherProjects: false };
+  let check = false;
+  for (const argument of args) {
+    if (argument === '--check') check = true;
+    else if (argument === '--clean') options.clean = true;
+    else if (argument === '--include-other-projects') options.includeOtherProjects = true;
+    else throw new Error(`Unknown storage option: ${argument}`);
+  }
+  if (check && options.clean) throw new Error('Use either --check or --clean, not both.');
   return options;
 }
 
@@ -265,7 +291,14 @@ async function main() {
   }
 
   if (command === 'run') {
-    await runFrontend(parseRunArgs(args));
+    await runFrontend(parseRunArgs(args), {
+      maintainMobileStorage: automaticallyMaintainMobileStorage,
+    });
+    return;
+  }
+
+  if (command === 'storage') {
+    runStorageCommand(parseStorageArgs(args));
     return;
   }
 
@@ -301,5 +334,6 @@ module.exports = {
   parseCreateArgs,
   parseRepairArgs,
   parseRunArgs,
+  parseStorageArgs,
   parseUpgradeArgs,
 };

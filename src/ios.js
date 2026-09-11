@@ -602,15 +602,19 @@ async function ensurePreferredIosSimulatorRuntime(
     return { changed: false, installed, preferred };
   }
 
-  if (installed.some(runtime => (
+  const existingPreferredRuntime = installed.find(runtime => (
     iosRuntimeMatchesPreferred(runtime, preferred)
-  ))) {
+  ));
+  if (existingPreferredRuntime) {
     clearIosRuntimeDownloadDeferral(cachePath);
     log(
       '✓ Latest compatible iOS Simulator runtime is installed (iOS '
       + preferred.version
       + (preferred.build ? ', build ' + preferred.build : '') + ')'
     );
+    // A previous run may have installed the replacement while cleanup was
+    // declined. Reuse the same verification and separate consent on later runs.
+    await cleanupReplacement(existingPreferredRuntime);
     return { changed: false, installed, preferred };
   }
 
@@ -666,7 +670,16 @@ async function ensurePreferredIosSimulatorRuntime(
     );
   }
 
-  const approved = await ask(question);
+  // --force approves runtime updates, not first-time installation or cleanup.
+  // Keep the original prompt callback available for those separate decisions.
+  const forcedUpdate = Boolean(current) && options.forceEmulatorUpdates === true;
+  if (forcedUpdate) {
+    log(
+      'Automatically approving the compatible iOS Simulator runtime update '
+      + 'with --force; the download can be several GB.'
+    );
+  }
+  const approved = forcedUpdate || await ask(question);
   if (!approved) {
     if (!current) {
       throw new Error(
@@ -1249,6 +1262,7 @@ async function prepareIosDevelopment({
   name,
   output,
   watchDiagnostics = false,
+  forceEmulatorUpdates = false,
   environment: appEnvironment,
 }) {
   const outputDir = path.resolve(output || process.cwd());
@@ -1276,7 +1290,10 @@ async function prepareIosDevelopment({
   const iosDir = path.join(outputDir, 'ios');
   ensureXcodeComponents(environment, iosDir);
   console.log('Checking for the latest compatible iOS Simulator runtime...');
-  await ensurePreferredIosSimulatorRuntime(environment, { cwd: iosDir });
+  await ensurePreferredIosSimulatorRuntime(environment, {
+    cwd: iosDir,
+    forceEmulatorUpdates,
+  });
   ensureIosPods(iosDir, environment, { outputDir });
   console.log('Checking for an eligible iOS simulator...');
   const nativeName = nativeAppName(outputDir);
