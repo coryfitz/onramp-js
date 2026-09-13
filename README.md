@@ -219,13 +219,37 @@ the Android Emulator package, and Android system-image versions/revisions,
 including creating a new AVD required by an image upgrade. Downloads can be
 several GB. It does not skip update checks, force an app rebuild (`--rebuild`),
 or bypass compatibility checks or rejected-download cooldowns. First installs,
-architecture repairs, display-only replacements, and cleanup still ask for
-confirmation; normal runs without the flag keep all existing prompts.
+architecture repairs, and display-only replacements still ask for confirmation.
+
+**`run mobile --force` also authorizes permanent cleanup of verified obsolete
+emulator files and saved device data, without another prompt.** After verifying
+the selected replacement, it removes eligible older idle iOS runtimes and their
+simulator devices, including obsolete devices whose runtime is already missing;
+older idle OnRamp Android AVDs (including superseded low-resolution devices);
+and older Android system images that no remaining AVD references. Deleting a
+device also deletes its installed apps, data, and snapshots. Shared runtimes
+and system images may have been used by other projects and must be downloaded
+again if needed. Cleanup runs in the mobile preflights before either Metro
+server starts, even when the newest replacement was already installed.
+
+Cleanup preserves selected/current and newer environments, active devices,
+user-created Android AVDs, referenced Android system images, and anything with
+uncertain identity or usage. It rechecks candidates immediately before removal;
+this is not a general SDK, dependency, cache, or project-file purge. Standalone
+`run ios --force` and `run android --force` continue to require separate cleanup
+confirmation, and normal runs without `--force` retain the existing prompts.
+Automatic image cleanup includes older stable Google API images across the
+standard and 16 KB page-size variants on the same architecture. Preview images,
+unrelated variants, and same-API extension images remain conservative exclusions.
+Xcode may complete runtime deletion asynchronously; pending deletion is not
+reported as reclaimed space. OnRamp warns if Apple retains an associated
+downloaded asset and never bypasses macOS protections to remove it.
 
 After verifying a newly installed iOS runtime, OnRamp offers to remove older
 idle runtimes through Xcode's runtime manager, showing their versions and
-approximate sizes. Removal requires separate confirmation because runtimes are
-shared by all projects and Mac users. Simulator devices and app data remain,
+approximate sizes. Outside `run mobile --force`, removal requires separate
+confirmation because runtimes are shared by all projects and Mac users.
+That ordinary runtime-only cleanup preserves simulator devices and app data,
 but older devices require their runtime to be downloaded again before use.
 Current and newer versions, same-version builds, and runtimes with active or
 uncertain device states are retained. Inventory is checked again before each
@@ -255,9 +279,10 @@ use the newest regular Pixel profile exposed by Android's tools. OnRamp detects
 generic low-resolution AVDs that blur when scaled, offers to create a sharper
 replacement from the installed system image, and prefers the sharper matching
 device. After verifying a replacement, OnRamp separately offers cleanup of
-eligible older idle OnRamp devices. This names the devices and requires consent
-to permanently delete their installed apps, data, and snapshots; declining
-keeps them. User-created devices remain. Older system images are offered for
+eligible older idle OnRamp devices. This names the devices and, unless already
+authorized by `run mobile --force`, requires consent to permanently delete their
+installed apps, data, and snapshots; declining keeps them. User-created devices
+remain. Older system images are offered for
 removal only when no remaining AVD references them and the replacement image
 is verified; uncertain inventories preserve the images. App installation
 explicitly targets that selected emulator even when another device is online. OnRamp then
@@ -314,9 +339,11 @@ process/identity checks still apply. Removed output is not retained in Trash
 and must be regenerated if that deleted project is restored.
 
 Older-runtime/AVD/unused-image prompts also run when the newest replacement is
-already installed, not just immediately after an upgrade. Those prompts retain
-their separate data-loss/other-project warnings and are never accepted by
-`--force`. Maintenance is optional and cannot fail an otherwise valid launch.
+already installed, not just immediately after an upgrade. Only `run mobile
+--force` preapproves the verified obsolete emulator cleanup described above;
+standalone `run ios --force` and `run android --force` still ask. Emulator cleanup
+is separate from the bounded disposable-storage collector and `storage --clean`.
+Maintenance is optional and cannot fail an otherwise valid launch.
 
 Contributors: keep the ownership-marker, PID, age, canonical-path, symlink,
 reinspection, and resource limits in `owned-temporary.js` and `xcode-storage.js`.

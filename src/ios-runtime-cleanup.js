@@ -1,3 +1,6 @@
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 const { capture } = require('./process');
 const { promptYesNo } = require('./prompt');
 
@@ -84,6 +87,162 @@ function cleanupCandidates(storage, replacement) {
   ));
 }
 
+function physicalPath(file, directory = false) {
+  if (typeof file !== 'string' || !path.isAbsolute(file) || path.resolve(file) !== file) {
+    return false;
+  }
+  try {
+    let current = path.parse(file).root;
+    for (const component of file.slice(current.length).split(path.sep)) {
+      current = path.join(current, component);
+      if (fs.lstatSync(current).isSymbolicLink()) return false;
+    }
+    const stat = fs.lstatSync(file);
+    return directory ? stat.isDirectory() : stat.isFile();
+  } catch (_error) {
+    return false;
+  }
+}
+
+function warnRetainedRuntimeDownload(image, log) {
+  const downloadPath = image.parentImagePath
+    || (image.kind === 'Patchable Cryptex Disk Image' ? image.path : null);
+  if (physicalPath(downloadPath)) {
+    log(`Apple retained the downloaded iOS ${image.version} runtime asset (${downloadPath}); `
+      + 'its disk space is not reported as reclaimed.');
+  }
+}
+
+function safeDevice(device, deviceRoot) {
+  if (!device || !UUID.test(device.udid) || device.state !== 'Shutdown'
+      || typeof device.isAvailable !== 'boolean'
+      || device.dataPath !== path.join(deviceRoot, device.udid, 'data')
+      || !physicalPath(device.dataPath, true)) return false;
+  try {
+    return typeof process.getuid !== 'function'
+      || fs.lstatSync(path.dirname(device.dataPath)).uid === process.getuid();
+  } catch (_error) {
+    return false;
+  }
+}
+
+function unambiguousStorage(storage) {
+  if (!storage || !Array.isArray(storage.images) || !Array.isArray(storage.runtimes)
+      || !storage.devices || Array.isArray(storage.devices)
+      || typeof storage.devices !== 'object') return false;
+  const ids = new Set();
+  for (const [runtime, devices] of Object.entries(storage.devices)) {
+    if (!runtime || !Array.isArray(devices)) return false;
+    for (const device of devices) {
+      if (!device || !UUID.test(device.udid) || ids.has(device.udid)
+          || typeof device.state !== 'string') return false;
+      ids.add(device.udid);
+    }
+  }
+  return storage.runtimes.every(runtime => runtime && typeof runtime.identifier === 'string')
+    && new Set(storage.runtimes.map(runtime => runtime.identifier)).size === storage.runtimes.length
+    && storage.images.every(image => image && UUID.test(image.identifier)
+      && typeof image.runtimeIdentifier === 'string'
+      && typeof image.platformIdentifier === 'string'
+      && typeof image.state === 'string')
+    && new Set(storage.images.map(image => image.identifier)).size === storage.images.length;
+}
+
+function obsoleteStorage(storage, replacement, deviceRoot) {
+  if (!unambiguousStorage(storage)) return { images: [], devices: [] };
+  const images = cleanupCandidates(storage, replacement).filter(image => (
+    physicalPath(image.path)
+    && storage.images.filter(other => other.runtimeIdentifier === image.runtimeIdentifier).length === 1
+    && storage.runtimes.some(runtime => runtime.identifier === image.runtimeIdentifier
+      && runtime.version === image.version
+      && (runtime.buildversion || runtime.buildVersion) === image.build)
+    && (storage.devices[image.runtimeIdentifier] || [])
+      .every(device => safeDevice(device, deviceRoot))
+  ));
+  const olderRuntimeIds = new Set(images.map(image => image.runtimeIdentifier));
+  const devices = [];
+  for (const [runtime, group] of Object.entries(storage.devices)) {
+    if (!IOS_RUNTIME.test(runtime)) continue;
+    const version = runtime.slice('com.apple.CoreSimulator.SimRuntime.iOS-'.length).replaceAll('-', '.');
+    const absentOlderRuntime = olderVersion(version, replacement.version)
+      && !storage.runtimes.some(installed => installed.identifier === runtime)
+      && !storage.images.some(image => image.runtimeIdentifier === runtime)
+      && group.every(device => device.isAvailable === false && safeDevice(device, deviceRoot));
+    if (olderRuntimeIds.has(runtime) || absentOlderRuntime) {
+      for (const device of group) devices.push({ ...device, runtime });
+    }
+  }
+  return { images, devices };
+}
+
+function removeObsoleteIosStorage(environment, options, inspect, captureFn, log, removed) {
+  const deviceRoot = options.deviceRoot
+    || path.join(os.homedir(), 'Library', 'Developer', 'CoreSimulator', 'Devices');
+  const initial = inspect();
+  if (!unambiguousStorage(initial)) return removed;
+  const replacement = verifiedReplacement(initial, options.replacement, options.simulatorId);
+  if (!replacement) return removed;
+  const candidates = obsoleteStorage(initial, replacement, deviceRoot);
+  if (candidates.images.length === 0 && candidates.devices.length === 0) return removed;
+  log('mobile --force: removing verified obsolete iOS runtimes and shutdown simulator devices. '
+    + 'Removed devices lose their saved apps and data; current/newer and active simulators are kept.');
+
+  for (const candidate of candidates.devices) {
+    const current = inspect();
+    if (!unambiguousStorage(current) || !verifiedReplacement(current, replacement)) break;
+    const safe = obsoleteStorage(current, replacement, deviceRoot).devices.find(device => (
+      device.udid === candidate.udid && device.runtime === candidate.runtime
+      && device.dataPath === candidate.dataPath
+    ));
+    if (!safe) {
+      log(`Keeping iOS simulator ${candidate.udid}; its state or storage changed.`);
+      continue;
+    }
+    const result = captureFn(environment.xcrun, ['simctl', 'delete', candidate.udid], {
+      env: environment.env, check: false,
+    });
+    const after = inspect();
+    if (result.status !== 0 || !unambiguousStorage(after)) {
+      log(`Could not confirm removal of iOS simulator ${candidate.udid}; continuing safely.`);
+      continue;
+    }
+    if (Object.values(after.devices).some(group => group.some(device => device.udid === candidate.udid))) {
+      log(`Removal requested for iOS simulator ${candidate.udid}; Xcode still lists it, so completion is pending.`);
+      continue;
+    }
+    removed.push(candidate.udid);
+    log(`✓ Removed obsolete iOS simulator ${candidate.name || candidate.udid}, including saved apps and data.`);
+  }
+
+  for (const candidate of candidates.images) {
+    const current = inspect();
+    if (!unambiguousStorage(current) || !verifiedReplacement(current, replacement)) break;
+    const safe = obsoleteStorage(current, replacement, deviceRoot).images.find(image => (
+      image.identifier === candidate.identifier && image.runtimeIdentifier === candidate.runtimeIdentifier
+      && image.version === candidate.version && image.build === candidate.build
+      && image.path === candidate.path
+    ));
+    // Do not remove a runtime if any device was preserved or could not be deleted.
+    if (!safe || (current.devices[candidate.runtimeIdentifier] || []).length > 0) continue;
+    const result = captureFn(environment.xcrun, ['simctl', 'runtime', 'delete', candidate.identifier], {
+      env: environment.env, check: false,
+    });
+    const after = inspect();
+    if (result.status !== 0 || !unambiguousStorage(after)) {
+      log(`Could not confirm removal of iOS ${candidate.version}; continuing safely.`);
+      continue;
+    }
+    if (after.images.some(image => image.identifier === candidate.identifier)) {
+      log(`Removal requested for iOS ${candidate.version}; Xcode still lists it, so completion is pending.`);
+      continue;
+    }
+    removed.push(candidate.identifier);
+    log(`✓ Removed obsolete iOS ${candidate.version} runtime.`);
+    warnRetainedRuntimeDownload(candidate, log);
+  }
+  return removed;
+}
+
 async function offerIosRuntimeCleanup(environment, options = {}) {
   const captureFn = options.captureFn || capture;
   const inspect = options.inspectStorage
@@ -92,6 +251,11 @@ async function offerIosRuntimeCleanup(environment, options = {}) {
   const log = options.log || console.log;
   const removed = [];
   try {
+    // Only coordinated mobile --force supplies this separate destructive option.
+    // The ordinary ios --force path still asks and never removes device data.
+    if (options.cleanupObsolete === true) {
+      return removeObsoleteIosStorage(environment, options, inspect, captureFn, log, removed);
+    }
     const storage = inspect();
     const replacement = verifiedReplacement(
       storage, options.replacement, options.simulatorId
@@ -134,11 +298,12 @@ async function offerIosRuntimeCleanup(environment, options = {}) {
         continue;
       }
       if (inspect().images.some(image => image.identifier === candidate.identifier)) {
-        log(`Xcode has not confirmed removal of iOS ${candidate.version}.`);
+        log(`Removal requested for iOS ${candidate.version}; Xcode still lists it, so completion is pending.`);
         continue;
       }
       removed.push(candidate.identifier);
       log(`✓ Removed older iOS ${candidate.version} runtime; simulator app data was kept.`);
+      warnRetainedRuntimeDownload(candidate, log);
     }
   } catch (_error) {
     // Cleanup is optional. An old Xcode, unreadable inventory, or removal failure

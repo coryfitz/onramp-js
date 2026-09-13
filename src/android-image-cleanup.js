@@ -9,6 +9,8 @@ const {
   removeAndroidSdkPackages,
 } = require('./android-sdk');
 
+const GOOGLE_API_IMAGE_TAGS = new Set(['google_apis', 'google_apis_ps16k']);
+
 function readIni(file) {
   const contents = fs.readFileSync(file, 'utf8');
   const values = new Map();
@@ -216,6 +218,7 @@ async function cleanupSupersededAndroidSystemImages({
   replacementPackagePath,
   packages,
   promptYesNo,
+  cleanupObsolete = false,
   listPackagesFn = listAndroidSdkPackages,
   removePackagesFn = removeAndroidSdkPackages,
   log = console.log,
@@ -233,8 +236,11 @@ async function cleanupSupersededAndroidSystemImages({
     const candidates = [];
     for (const packageInfo of packages.values()) {
       const details = androidSystemImageDetails(packageInfo);
+      const compatibleTag = details && (details.tag === replacement.tag
+        || (cleanupObsolete === true && GOOGLE_API_IMAGE_TAGS.has(details.tag)
+          && GOOGLE_API_IMAGE_TAGS.has(replacement.tag)));
       if (!details || !packageInfo.installedVersion
-          || details.tag !== replacement.tag
+          || !compatibleTag
           || details.architecture !== replacement.architecture
           || compareVersions(details.api, replacement.api) >= 0) {
         continue;
@@ -248,7 +254,7 @@ async function cleanupSupersededAndroidSystemImages({
         // An incomplete or unreadable installation is not safe to remove.
       }
     }
-    if (!candidates.length || typeof promptYesNo !== 'function') {
+    if (!candidates.length || (cleanupObsolete !== true && typeof promptYesNo !== 'function')) {
       return removed;
     }
     candidates.sort((left, right) => (
@@ -256,7 +262,7 @@ async function cleanupSupersededAndroidSystemImages({
     ));
     const gigabytes = candidates.reduce((sum, candidate) => sum + candidate.bytes, 0)
       / 1024 ** 3;
-    const approved = await promptYesNo(
+    const approved = cleanupObsolete === true || await promptYesNo(
       'The replacement Android system image is installed. Remove these older '
       + 'system images, which no discovered virtual device references, from '
       + 'the shared SDK at ' + sdk + '? This may free about '
@@ -266,6 +272,11 @@ async function cleanupSupersededAndroidSystemImages({
     );
     if (!approved) {
       return removed;
+    }
+    if (cleanupObsolete === true) {
+      log('mobile --force: removing unused older Android system images ('
+        + gigabytes.toFixed(1) + ' GiB): '
+        + candidates.map(candidate => candidate.packageInfo.path).join(', ') + '.');
     }
     for (const candidate of candidates) {
       // Consent can stay open while Android Studio creates a device or updates

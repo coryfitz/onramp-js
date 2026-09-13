@@ -670,8 +670,8 @@ async function ensurePreferredIosSimulatorRuntime(
     );
   }
 
-  // --force approves runtime updates, not first-time installation or cleanup.
-  // Keep the original prompt callback available for those separate decisions.
+  // Update approval does not imply first-time installation or cleanup approval.
+  // Coordinated mobile --force passes cleanupObsolete separately.
   const forcedUpdate = Boolean(current) && options.forceEmulatorUpdates === true;
   if (forcedUpdate) {
     log(
@@ -1263,6 +1263,7 @@ async function prepareIosDevelopment({
   output,
   watchDiagnostics = false,
   forceEmulatorUpdates = false,
+  cleanupObsolete = false,
   environment: appEnvironment,
 }) {
   const outputDir = path.resolve(output || process.cwd());
@@ -1293,6 +1294,7 @@ async function prepareIosDevelopment({
   await ensurePreferredIosSimulatorRuntime(environment, {
     cwd: iosDir,
     forceEmulatorUpdates,
+    cleanupObsolete,
   });
   ensureIosPods(iosDir, environment, { outputDir });
   console.log('Checking for an eligible iOS simulator...');
@@ -1314,8 +1316,14 @@ async function prepareIosDevelopment({
     simulator = await ensureEligibleIosSimulator(
       iosDir,
       nativeName,
-      environment
+      environment,
+      { cleanupObsolete }
     );
+  }
+  if (cleanupObsolete) {
+    // A rejected preferred download or its cooldown must not suppress cleanup
+    // once an actually usable replacement has been selected and verified.
+    await offerIosRuntimeCleanup(environment, { cleanupObsolete, simulatorId: simulator.id });
   }
   const bundleIdentifier = resolvedIosBundleIdentifier(
     outputDir,

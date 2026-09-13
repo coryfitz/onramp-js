@@ -2083,7 +2083,49 @@ function createAndroidAvd(
   return name;
 }
 
-function inspectAndroidAvdForCleanup(avd, sdk, env) {
+function androidCleanupProcessState(pid) {
+  try {
+    process.kill(pid, 0);
+    return 'alive';
+  } catch (error) {
+    return error.code === 'ESRCH' ? 'dead' : 'unknown';
+  }
+}
+
+function androidAvdCleanupLocks(directory, processStateFn) {
+  const names = fs.readdirSync(directory).filter(name => /\.lock$/.test(name)).sort();
+  if (!names.length) return { locked: false, lockFingerprint: '[]' };
+  if (!names.includes('hardware-qemu.ini.lock')
+      || names.some(name => !['hardware-qemu.ini.lock', 'multiinstance.lock'].includes(name))) {
+    return { locked: true };
+  }
+  const records = [];
+  let pid;
+  for (const name of names) {
+    const file = path.join(directory, name);
+    const stat = fs.lstatSync(file);
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1
+        || (typeof process.getuid === 'function' && stat.uid !== process.getuid())
+        || stat.size > 32 || (name === 'multiinstance.lock' && stat.size !== 0)) {
+      return { locked: true };
+    }
+    const contents = fs.readFileSync(file, 'utf8');
+    if (name === 'hardware-qemu.ini.lock') {
+      // Emulator writes an ASCII PID with a terminating NUL. Do not infer
+      // ownership from timestamps, malformed contents, or unknown lock types.
+      const match = contents.match(/^([1-9]\d*)(?:\0|\r?\n)?$/);
+      if (!match || match[0] !== contents || !Number.isSafeInteger(Number(match[1]))) {
+        return { locked: true };
+      }
+      pid = Number(match[1]);
+    }
+    records.push([name, stat.dev, stat.ino, stat.size, stat.mtimeMs, stat.ctimeMs, contents]);
+  }
+  if (processStateFn(pid) !== 'dead') return { locked: true };
+  return { locked: false, lockFingerprint: JSON.stringify(records) };
+}
+
+function inspectAndroidAvdForCleanup(avd, sdk, env, processStateFn = androidCleanupProcessState) {
   if (!/^OnRamp_API_\d+(?:_\d+)*$/.test(avd)) {
     return null;
   }
@@ -2157,7 +2199,7 @@ function inspectAndroidAvdForCleanup(avd, sdk, env) {
     ...metadata,
     locatorContents,
     configContents,
-    locked: fs.readdirSync(directory).some(name => /\.lock$/.test(name)),
+    ...androidAvdCleanupLocks(directory, processStateFn),
   };
 }
 
@@ -2193,6 +2235,8 @@ async function cleanupSupersededAndroidAvds({
   avds,
   environment,
   promptYesNo: ask,
+  cleanupObsolete = false,
+  processStateFn = androidCleanupProcessState,
   captureFn = capture,
   log = console.log,
 }) {
@@ -2202,13 +2246,13 @@ async function cleanupSupersededAndroidAvds({
     if (!avdManager || !adb) {
       return removed;
     }
-    const retained = inspectAndroidAvdForCleanup(replacement, sdk, env);
+    const retained = inspectAndroidAvdForCleanup(replacement, sdk, env, processStateFn);
     if (!retained || !retained.display.sharp) {
       return removed;
     }
     const active = activeAndroidAvdsForCleanup(adb, env, captureFn);
     const candidates = avds.filter(avd => avd !== replacement)
-      .map(avd => inspectAndroidAvdForCleanup(avd, sdk, env))
+      .map(avd => inspectAndroidAvdForCleanup(avd, sdk, env, processStateFn))
       .filter(candidate => (
         candidate
         && !candidate.locked
@@ -2224,20 +2268,26 @@ async function cleanupSupersededAndroidAvds({
     if (candidates.length === 0) {
       return removed;
     }
-    const approved = await ask(
+    const approved = cleanupObsolete === true || (typeof ask === 'function' && await ask(
       'The replacement Android virtual device ' + replacement + ' is ready. '
       + 'Delete these older OnRamp devices: '
       + candidates.map(candidate => candidate.avd).join(', ')
       + '? This permanently deletes their installed apps, settings, snapshots, '
       + 'and app data. Android system images are kept unless separately '
       + 'approved for cleanup. (y/N): '
-    );
+    ));
     if (!approved) {
       return removed;
     }
+    if (cleanupObsolete === true) {
+      log('mobile --force: removing obsolete OnRamp Android devices: '
+        + candidates.map(candidate => candidate.avd).join(', ')
+        + ', including their installed apps, settings, snapshots, and app data.');
+    }
     for (const candidate of candidates) {
-      const currentReplacement = inspectAndroidAvdForCleanup(replacement, sdk, env);
-      const current = inspectAndroidAvdForCleanup(candidate.avd, sdk, env);
+      const currentReplacement = inspectAndroidAvdForCleanup(replacement, sdk, env, processStateFn);
+      const activeNow = activeAndroidAvdsForCleanup(adb, env, captureFn);
+      const current = inspectAndroidAvdForCleanup(candidate.avd, sdk, env, processStateFn);
       if (
         !currentReplacement
         || !currentReplacement.display.sharp
@@ -2251,7 +2301,8 @@ async function cleanupSupersededAndroidAvds({
         || current.locked
         || current.configContents !== candidate.configContents
         || current.locatorContents !== candidate.locatorContents
-        || activeAndroidAvdsForCleanup(adb, env, captureFn).has(candidate.avd)
+        || current.lockFingerprint !== candidate.lockFingerprint
+        || activeNow.has(candidate.avd)
       ) {
         log('Kept Android virtual device ' + candidate.avd
           + ' because it is in use or changed during cleanup.');
@@ -2597,13 +2648,14 @@ async function prepareAndroidEnvironment(options = {}) {
         ) return;
 
         // Reused replacements need the same cleanup opportunity as newly
-        // created ones. Neither update approval nor --force authorizes deletion.
+        // created ones. Only mobile's explicit cleanup option bypasses prompts.
         await cleanupSupersededAndroidAvds({
           avdManager: findAvdManager(environment.sdk, sdkManager),
           replacement,
           avds,
           environment: { ...environment, adb },
           promptYesNo: ask,
+          cleanupObsolete: options.cleanupObsolete === true,
           captureFn,
           log,
         });
@@ -2613,6 +2665,7 @@ async function prepareAndroidEnvironment(options = {}) {
           env: environment.env,
           replacementPackagePath: replacementMetadata.packagePath,
           promptYesNo: ask,
+          cleanupObsolete: options.cleanupObsolete === true,
           listPackagesFn: (manager, sdk, env) => (
             (options.listPackages || listAndroidSdkPackages)(manager, sdk, env, captureFn)
           ),
@@ -2813,11 +2866,12 @@ async function prepareAndroidDevelopment({
   output,
   watchDiagnostics = false,
   forceEmulatorUpdates = false,
+  cleanupObsolete = false,
   environment: appEnvironment,
 }) {
   const outputDir = path.resolve(output || process.cwd());
   console.log('Preparing Android development...');
-  const environment = await prepareAndroidEnvironment({ forceEmulatorUpdates });
+  const environment = await prepareAndroidEnvironment({ forceEmulatorUpdates, cleanupObsolete });
   environment.env.ONRAMP_PLATFORM = 'android';
   if (watchDiagnostics) {
     environment.env.ONRAMP_WATCH_DIAGNOSTICS = '1';

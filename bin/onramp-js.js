@@ -36,7 +36,8 @@ Options:
   --environment  Select the development, staging, or production app profile
   --watch-diagnostics  Log source paths that can trigger native Fast Refresh
   --rebuild  Force a fresh native app build instead of reusing an unchanged installation
-  --force   Accept emulator updates for native runs; still ask before first installs or cleanup
+  --force   Accept emulator updates; mobile also deletes verified obsolete emulator files/data
+            ios/android still ask before cleanup; first installs and repairs remain opt-in
   --fresh   Recreate Podfile.lock during an iOS repair
   --check   Read-only upgrade or storage check
   --clean   Remove eligible abandoned build output and owned temporary files

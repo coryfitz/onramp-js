@@ -193,6 +193,19 @@ test('reused Android replacement cleans only explicitly approved older devices a
   assert.ok(f.packages.has(f.image(35)));
 });
 
+test('mobile cleanup option removes obsolete reused Android devices and images without prompting', async t => {
+  const f = androidFixture(t);
+  const result = await prepareAndroidEnvironment({
+    ...f.options, forceEmulatorUpdates: true, cleanupObsolete: true,
+    promptYesNo: () => assert.fail('verified reused mobile environment must not prompt'),
+  });
+  assert.equal(result.avd, 'OnRamp_API_35');
+  assert.deepEqual(f.removedDevices, ['OnRamp_API_34']);
+  assert.deepEqual(f.removedImages, [f.image(33), f.image(34)]);
+  assert.ok(fs.existsSync(path.join(f.avdHome, 'OnRamp_API_35.avd/user-data')));
+  assert.ok(f.packages.has(f.image(35)));
+});
+
 test('declining a newer Android image does not offer cleanup against an uninstalled replacement', async t => {
   const f = androidFixture(t);
   f.packages.set(f.image(36), { path: f.image(36), availableVersion: '1' });

@@ -90,6 +90,63 @@ test('declining the package list preserves every image', async t => {
   assert.deepEqual(f.calls, []);
 });
 
+test('mobile cleanup skips prompts but retains referenced, current, newer and different images', async t => {
+  const f = fixture(t);
+  const referenced = 'system-images;android-34;google_apis;arm64-v8a';
+  const preserved = [
+    referenced, NEW,
+    'system-images;android-38;google_apis;arm64-v8a',
+    'system-images;android-35;google_apis_playstore;arm64-v8a',
+    'system-images;android-35;google_apis;x86_64',
+  ];
+  preserved.forEach(packagePath => f.install(packagePath));
+  f.avd('Other_Project', referenced);
+  assert.deepEqual(await cleanupSupersededAndroidSystemImages({
+    ...f.options, cleanupObsolete: true,
+    promptYesNo: () => assert.fail('mobile cleanup must not prompt'),
+  }), [OLD]);
+  preserved.forEach(packagePath => assert.ok(f.packages.has(packagePath)));
+});
+
+test('mobile cleanup rechecks new AVD references immediately before uninstall', async t => {
+  const f = fixture(t);
+  assert.deepEqual(await cleanupSupersededAndroidSystemImages({
+    ...f.options, cleanupObsolete: true,
+    listPackagesFn: () => { f.avd('New_Other_Project', OLD); return f.packages; },
+    promptYesNo: () => assert.fail('mobile cleanup must not prompt'),
+  }), []);
+  assert.deepEqual(f.calls, []);
+  assert.ok(f.packages.has(OLD));
+});
+
+test('only mobile cleanup spans stable Google API page-size variants with the same ABI', async t => {
+  for (const cleanupObsolete of [false, true]) {
+    await t.test(`mobile cleanup=${cleanupObsolete}`, async st => {
+      const f = fixture(st);
+      const replacement = 'system-images;android-37.1;google_apis_ps16k;arm64-v8a';
+      const referenced = 'system-images;android-34;google_apis;arm64-v8a';
+      const preview = 'system-images;android-33;google_apis;arm64-v8a';
+      const preserved = [
+        replacement, NEW, referenced, preview,
+        'system-images;android-38;google_apis;arm64-v8a',
+        'system-images;android-35;google_apis_playstore;arm64-v8a',
+        'system-images;android-35;custom_vendor;arm64-v8a',
+        'system-images;android-35;google_apis;x86_64',
+      ];
+      preserved.forEach(packagePath => f.install(packagePath));
+      fs.writeFileSync(path.join(f.sdk, ...preview.split(';'), 'source.properties'),
+        'AndroidVersion.CodeName=Preview\n');
+      f.avd('Other_Project', referenced);
+      assert.deepEqual(await cleanupSupersededAndroidSystemImages({
+        ...f.options, replacementPackagePath: replacement, cleanupObsolete,
+      }), cleanupObsolete ? [OLD] : []);
+      assert.deepEqual(f.questions, []);
+      preserved.forEach(packagePath => assert.ok(f.packages.has(packagePath)));
+      assert.equal(f.packages.has(OLD), !cleanupObsolete);
+    });
+  }
+});
+
 test('protects non-OnRamp AVDs in custom locations and relative image paths', async t => {
   const f = fixture(t);
   f.avd('My_Android_Studio_Device', OLD, { directory: path.join(f.root, 'custom-device') });
@@ -249,13 +306,16 @@ test('rechecks before every removal and stops when a new reference appears', asy
 });
 
 test('does not report a successful no-op uninstall as removed storage', async t => {
-  for (const state of ['unchanged', 'directory-only', 'inventory-only', 'nonzero-status']) {
+  for (const state of ['unchanged', 'not-found', 'directory-only', 'inventory-only', 'nonzero-status']) {
     await t.test(state, async st => {
       const f = fixture(st);
       f.options.removePackagesFn = async () => {
         if (state === 'directory-only') fs.rmSync(path.join(f.sdk, ...OLD.split(';')), { recursive: true });
         if (state === 'inventory-only') f.packages.delete(OLD);
-        return { status: state === 'nonzero-status' ? 1 : 0 };
+        return {
+          status: state === 'nonzero-status' ? 1 : 0,
+          stdout: state === 'not-found' ? 'None of the packages were found in the SDK.' : '',
+        };
       };
       assert.deepEqual(await cleanupSupersededAndroidSystemImages(f.options), []);
       assert.match(f.logs.at(-1), /cleanup skipped.*removal/);

@@ -224,6 +224,100 @@ test('offers exact older OnRamp AVDs, deletes approved data, and keeps shared im
   assert.equal(fs.existsSync(path.join(fixture.avdHome, fixture.options.replacement + '.avd')), true);
 });
 
+test('mobile cleanup removes only obsolete idle OnRamp devices without a prompt', async t => {
+  const fixture = avdFixture(t);
+  fixture.makeAvd('OnRamp_API_36', '36');
+  fixture.makeAvd('OnRamp_API_37_1', '37.1', false);
+  const preserved = [
+    fixture.makeAvd('My_Test_Phone', '35'),
+    fixture.makeAvd('OnRamp_API_38', '38'),
+    fixture.makeAvd('OnRamp_API_37_1_3'),
+    fixture.makeAvd('OnRamp_API_34', '34'),
+  ];
+  fixture.active.set('emulator-5554', 'OnRamp_API_34');
+  const removed = await cleanupSupersededAndroidAvds({
+    ...fixture.options, cleanupObsolete: true,
+    promptYesNo: () => assert.fail('mobile cleanup must not prompt'),
+  });
+  assert.deepEqual(removed, ['OnRamp_API_36', 'OnRamp_API_37_1']);
+  preserved.forEach(directory => assert.ok(fs.existsSync(path.join(directory, 'user-data'))));
+  assert.ok(fs.existsSync(path.join(fixture.sdk, 'system-images', 'android-36')));
+  assert.match(fixture.logs.join('\n'), /mobile --force: removing.*OnRamp_API_36/);
+});
+
+test('known stale emulator locks allow cleanup only for a definitely dead owner', async t => {
+  for (const state of ['dead', 'alive', 'unknown']) {
+    await t.test(state, async st => {
+      const fixture = avdFixture(st);
+      const old = fixture.makeAvd('OnRamp_API_37_1', '37.1', false);
+      fs.writeFileSync(path.join(old, 'hardware-qemu.ini.lock'), '98897\0');
+      fs.writeFileSync(path.join(old, 'multiinstance.lock'), '');
+      let probes = 0;
+      const removed = await cleanupSupersededAndroidAvds({
+        ...fixture.options, cleanupObsolete: true,
+        processStateFn: pid => { assert.equal(pid, 98897); probes += 1; return state; },
+        promptYesNo: () => assert.fail('mobile cleanup must not prompt'),
+      });
+      assert.deepEqual(removed, state === 'dead' ? ['OnRamp_API_37_1'] : []);
+      assert.ok(probes >= (state === 'dead' ? 2 : 1));
+      assert.equal(fs.existsSync(old), state !== 'dead');
+    });
+  }
+});
+
+test('live PIDs and malformed, unknown, linked or standalone companion locks preserve AVDs', async t => {
+  for (const scenario of ['live', 'malformed', 'extra-pid', 'unknown-lock', 'companion-only', 'companion-data', 'directory', 'symlink']) {
+    await t.test(scenario, async st => {
+      const fixture = avdFixture(st);
+      const old = fixture.makeAvd('OnRamp_API_36', '36');
+      const lock = path.join(old, 'hardware-qemu.ini.lock');
+      if (scenario === 'live') fs.writeFileSync(lock, String(process.pid) + '\0');
+      else if (scenario === 'malformed') fs.writeFileSync(lock, 'busy');
+      else if (scenario === 'extra-pid') fs.writeFileSync(lock, '98897\0other');
+      else if (scenario === 'directory') fs.mkdirSync(lock);
+      else if (scenario === 'symlink') {
+        const outside = path.join(fixture.avdHome, 'outside-lock');
+        fs.writeFileSync(outside, '98897\0');
+        fs.symlinkSync(outside, lock);
+      } else if (scenario !== 'companion-only') fs.writeFileSync(lock, '98897\0');
+      if (scenario === 'unknown-lock') fs.writeFileSync(path.join(old, 'snapshot.lock'), '');
+      if (scenario.startsWith('companion-')) {
+        fs.writeFileSync(path.join(old, 'multiinstance.lock'), scenario === 'companion-data' ? 'unknown' : '');
+      }
+      const options = { ...fixture.options, cleanupObsolete: true };
+      if (scenario !== 'live') options.processStateFn = () => 'dead';
+      assert.deepEqual(await cleanupSupersededAndroidAvds(options), []);
+      assert.ok(fs.existsSync(path.join(old, 'user-data')));
+      assert.deepEqual(fixture.prompts, []);
+    });
+  }
+});
+
+test('mobile cleanup rechecks stale lock ownership and active devices before removal', async t => {
+  for (const scenario of ['owner-live', 'lock-changed', 'device-active']) {
+    await t.test(scenario, async st => {
+      const fixture = avdFixture(st);
+      const old = fixture.makeAvd('OnRamp_API_36', '36');
+      const lock = path.join(old, 'hardware-qemu.ini.lock');
+      fs.writeFileSync(lock, '98897\0');
+      let checks = 0;
+      const removed = await cleanupSupersededAndroidAvds({
+        ...fixture.options, cleanupObsolete: true,
+        processStateFn: () => scenario === 'owner-live' && checks > 1 ? 'alive' : 'dead',
+        captureFn: (command, args) => {
+          if (command === 'adb' && args[0] === 'devices' && ++checks === 2) {
+            if (scenario === 'device-active') fixture.active.set('emulator-5554', 'OnRamp_API_36');
+            if (scenario === 'lock-changed') fs.writeFileSync(lock, '98898\0');
+          }
+          return fixture.captureFn(command, args);
+        },
+      });
+      assert.deepEqual(removed, []);
+      assert.ok(fs.existsSync(path.join(old, 'user-data')));
+    });
+  }
+});
+
 test('preserves device data when cleanup is declined or replacement is invalid', async t => {
   for (const scenario of ['declined', 'missing', 'blurry']) {
     const fixture = avdFixture(t);

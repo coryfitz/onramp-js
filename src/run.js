@@ -118,6 +118,7 @@ async function runMobile(options, runners = {
     watchDiagnostics: options.watchDiagnostics,
     environment: options.environment,
     forceEmulatorUpdates: options.forceEmulatorUpdates,
+    cleanupObsolete: options.forceEmulatorUpdates === true,
   };
   const preparedAndroid = await runners.prepareAndroidDevelopment(
     preparationOptions
