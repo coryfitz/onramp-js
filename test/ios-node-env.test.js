@@ -81,9 +81,25 @@ test('does not follow linked local Xcode configuration or accept executable-path
 
 test('refreshes the Node pin even when the CocoaPods lockfiles are already current', t => {
   const {root, file} = fixture(t, 'export NODE_BINARY=/old/node\n');
-  fs.mkdirSync(path.join(root, 'Pods'));
+  const podsProject = path.join(root, 'Pods', 'Pods.xcodeproj', 'project.pbxproj');
+  fs.mkdirSync(path.dirname(podsProject), {recursive: true});
+  fs.writeFileSync(podsProject, 'IPHONEOS_DEPLOYMENT_TARGET = 13.0;\n');
+  const helpers = path.join(
+    root,
+    'node_modules',
+    'react-native',
+    'scripts',
+    'cocoapods',
+    'helpers.rb',
+  );
+  fs.mkdirSync(path.dirname(helpers), {recursive: true});
+  fs.writeFileSync(
+    helpers,
+    "def self.min_ios_version_supported\n  return '15.1'\nend\n",
+  );
   fs.writeFileSync(path.join(root, 'Podfile.lock'), 'LOCKED');
   fs.writeFileSync(path.join(root, 'Pods', 'Manifest.lock'), 'LOCKED');
   ensureIosPods(root, {env: {}, xcrun: '/missing/xcrun'}, {outputDir: root});
   assert.ok(fs.readFileSync(file, 'utf8').includes(process.execPath));
+  assert.match(fs.readFileSync(podsProject, 'utf8'), /DEPLOYMENT_TARGET = 15\.1/);
 });

@@ -95,6 +95,12 @@ when Pods are cached. Other settings and comments are retained. App-owned
 dynamic Node resolvers and symlinked configuration are preserved; those must
 resolve to the supported Node 22 version themselves. This prevents an old
 CocoaPods-generated Node 20 path from overriding the updated shell toolchain.
+After using current Pods or completing `pod install`, OnRamp also raises any
+explicit generated Pod deployment targets below React Native's supported iOS
+minimum. This includes CocoaPods resource-bundle targets and multi-project Pod
+layouts, which prevents newer Xcode releases from rejecting a dependency's
+obsolete target without changing the app-owned Podfile or lowering targets that
+already require a newer iOS version.
 
 ### Android release signing
 

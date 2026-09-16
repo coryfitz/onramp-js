@@ -13,6 +13,7 @@ const { capture, findExecutable, run, runAsync } = require('./process');
 const { promptYesNo } = require('./prompt');
 const { offerIosRuntimeCleanup } = require('./ios-runtime-cleanup');
 const { syncIosNodeEnvironment } = require('./ios-node-env');
+const { ensureIosPodsDeploymentTarget } = require('./ios-pods-deployment-target');
 
 const IOS_DESTINATION_QUERY_ATTEMPTS = 3;
 const IOS_DESTINATION_RETRY_DELAY_MS = 500;
@@ -512,6 +513,17 @@ function iosPodsAreCurrent(iosDir, outputDir = path.dirname(iosDir)) {
   );
 }
 
+function applyIosPodsCompatibilityAdjustments(iosDir, outputDir, environment) {
+  applyFmtAppleClangWorkaround(iosDir, environment);
+  const deploymentTargets = ensureIosPodsDeploymentTarget(iosDir, outputDir);
+  if (deploymentTargets.raised > 0) {
+    console.log(
+      `✓ Raised ${deploymentTargets.raised} generated iOS Pod deployment settings `
+      + `to React Native's ${deploymentTargets.minimum} minimum`,
+    );
+  }
+}
+
 function ensureIosPods(iosDir, environment, options = {}) {
   const outputDir = options.outputDir || path.dirname(iosDir);
   const nodeEnvironment = syncIosNodeEnvironment(iosDir);
@@ -522,12 +534,12 @@ function ensureIosPods(iosDir, environment, options = {}) {
   }
   if (!options.force && iosPodsAreCurrent(iosDir, outputDir)) {
     console.log('✓ iOS Pods are current');
-    applyFmtAppleClangWorkaround(iosDir, environment);
+    applyIosPodsCompatibilityAdjustments(iosDir, outputDir, environment);
     return;
   }
   console.log('Ensuring iOS dependencies (Pods)...');
   run(environment.pod, ['install'], iosDir, environment.env);
-  applyFmtAppleClangWorkaround(iosDir, environment);
+  applyIosPodsCompatibilityAdjustments(iosDir, outputDir, environment);
   console.log('✓ iOS dependencies installed');
 }
 
