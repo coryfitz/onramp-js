@@ -172,7 +172,9 @@ change while the selected simulator is active, OnRamp restarts only that
 simulator without wiping its apps or data. If an existing connection cannot be
 verified, or macOS denies the narrow preference access, launch continues
 without claiming keyboard forwarding is active and prints the exact per-device
-menu to use.
+menu to use. Device Hub launches also keep the Mac and selected simulator
+pasteboards synchronized for the lifetime of the project's Metro process;
+clipboard contents remain between the Mac and simulator and are not logged.
 
 `npx onramp-js repair ios` preserves `Podfile.lock`. Add `--fresh` only when a
 new native dependency resolution is intentional.

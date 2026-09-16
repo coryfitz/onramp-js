@@ -214,6 +214,10 @@ exact per-device menu to use. For Android, it repairs only AVDs in the reserved
 an already-running matching AVD may cold-start once for the setting to take
 effect, without wiping its installed apps or data. AVDs outside that namespace
 and ambiguous metadata are left unchanged with manual keyboard guidance.
+When Xcode Device Hub opens an iOS simulator, OnRamp also starts Apple's
+bidirectional pasteboard synchronization for that exact device. The sync stays
+private to the Mac and simulator, never prints clipboard contents, and stops
+with the project's Metro server.
 On macOS, Metro uses its native file watcher. Cloud sync, indexing, and similar
 services can still emit metadata-only dependency events even though no module
 contents changed. OnRamp lets Metro calculate each delta, suppresses only HMR

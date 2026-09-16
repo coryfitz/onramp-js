@@ -1,6 +1,7 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const { spawn } = require('child_process');
 const { addNativePlatforms } = require('./native');
 const {
   cachedNativeBuild,
@@ -9,7 +10,13 @@ const {
   recordNativeBuild,
 } = require('./native-build-cache');
 const { startMetro, warmMetroBundle } = require('./metro');
-const { capture, findExecutable, run, runAsync } = require('./process');
+const {
+  capture,
+  childEnvironment,
+  findExecutable,
+  run,
+  runAsync,
+} = require('./process');
 const { promptYesNo } = require('./prompt');
 const { offerIosRuntimeCleanup } = require('./ios-runtime-cleanup');
 const { syncIosNodeEnvironment } = require('./ios-node-env');
@@ -18,6 +25,7 @@ const { ensureIosPodsDeploymentTarget } = require('./ios-pods-deployment-target'
 const IOS_DESTINATION_QUERY_ATTEMPTS = 3;
 const IOS_DESTINATION_RETRY_DELAY_MS = 500;
 const IOS_RUNTIME_DOWNLOAD_RETRY_MS = 24 * 60 * 60 * 1000;
+const IOS_PASTEBOARD_SYNC_SESSION_SECONDS = 365 * 24 * 60 * 60;
 const IOS_SIMULATOR_SHUTDOWN_TIMEOUT_MS = 30000;
 const IOS_SIMULATOR_SHUTDOWN_POLL_MS = 250;
 const SYSTEM_ENV = '/usr/bin/env';
@@ -1652,6 +1660,127 @@ function showIosSimulator(
   console.log(`✓ ${simulator.name} window opened`);
 }
 
+function startIosPasteboardSync(
+  simulator,
+  environment,
+  options = {}
+) {
+  const captureCommand = options.captureCommand || capture;
+  const spawnCommand = options.spawnCommand || spawn;
+  const warn = options.warn || console.warn;
+  const log = options.log || console.log;
+  const sessionSeconds = options.sessionSeconds
+    || IOS_PASTEBOARD_SYNC_SESSION_SECONDS;
+  const reportUnavailable = detail => {
+    warn(
+      `Warning: OnRamp could not prepare clipboard sharing for `
+      + `${simulator.name}${detail ? `: ${detail}` : '.'} Reopen the selected `
+      + 'simulator in Device Hub and try again.'
+    );
+    return null;
+  };
+  let info;
+  try {
+    info = captureCommand(
+      environment.xcrun,
+      [
+        'devicectl',
+        'device',
+        'pasteboard',
+        'info',
+        '--device',
+        simulator.id,
+        '--timeout',
+        '5',
+        '--quiet',
+      ],
+      { env: environment.env, check: false }
+    );
+  } catch (error) {
+    return reportUnavailable(error.message);
+  }
+  if (info.status !== 0) {
+    return reportUnavailable((info.stderr || info.stdout || '').trim());
+  }
+
+  let child;
+  try {
+    child = spawnCommand(
+      environment.xcrun,
+      [
+        'devicectl',
+        'device',
+        'pasteboard',
+        'sync-with-host',
+        '--device',
+        simulator.id,
+        '--session-timeout',
+        String(sessionSeconds),
+        '--timeout',
+        String(sessionSeconds + 1),
+        '--quiet',
+      ],
+      {
+        env: childEnvironment(environment.env),
+        shell: false,
+        stdio: ['ignore', 'ignore', 'pipe'],
+      }
+    );
+  } catch (error) {
+    return reportUnavailable(error.message);
+  }
+  let stopped = false;
+  let failure = '';
+  if (child.stderr) {
+    child.stderr.on('data', chunk => {
+      failure = `${failure}${chunk}`.slice(-4096);
+    });
+  }
+  const stop = signal => {
+    if (stopped || child.exitCode !== null) {
+      return;
+    }
+    stopped = true;
+    child.kill(signal || 'SIGTERM');
+  };
+  child.once('error', error => {
+    if (!stopped) {
+      warn(
+        `Warning: iOS clipboard sharing could not start for ${simulator.name}: `
+        + error.message
+      );
+    }
+  });
+  child.once('exit', (code, signal) => {
+    if (stopped) {
+      return;
+    }
+    const detail = failure.trim();
+    warn(
+      `Warning: iOS clipboard sharing stopped unexpectedly for ${simulator.name}`
+      + `${code !== null ? ` with status ${code}` : ''}`
+      + `${signal ? ` after signal ${signal}` : ''}`
+      + `${detail ? `: ${detail}` : '.'}`
+    );
+  });
+  log(`✓ Mac and ${simulator.name} clipboards are synchronized`);
+  return { child, stop };
+}
+
+function attachIosPasteboardSync(metro, pasteboardSync) {
+  if (!pasteboardSync) {
+    return metro;
+  }
+  const stopMetro = metro.stop;
+  metro.stop = signal => {
+    pasteboardSync.stop(signal || 'SIGTERM');
+    stopMetro(signal);
+  };
+  metro.child.once('exit', () => pasteboardSync.stop('SIGTERM'));
+  metro.pasteboardSync = pasteboardSync;
+  return metro;
+}
+
 function selectIosSimulator(
   destinations,
   environment,
@@ -2051,6 +2180,12 @@ async function launchPreparedIos(
   });
   console.log(`Using Metro port ${metro.port}`);
   try {
+    if (resolvedSimulatorApplication.kind === 'device-hub') {
+      attachIosPasteboardSync(
+        metro,
+        startIosPasteboardSync(simulator, environment)
+      );
+    }
     await warmMetroBundle({ port: metro.port, platform: 'ios' });
     const fingerprint = nativeBuildFingerprint(outputDir, 'ios');
     const cached = cachedNativeBuild(outputDir, 'ios');
@@ -2162,6 +2297,7 @@ async function repairIos({ name, output, fresh = false }) {
 
 module.exports = {
   activateIosSimulator,
+  attachIosPasteboardSync,
   availableIosSimulatorDevices,
   availableIosSimulatorRuntimes,
   availableIosSimulatorRuntimeVersions,
@@ -2199,4 +2335,5 @@ module.exports = {
   runIos,
   selectIosSimulator,
   showIosSimulator,
+  startIosPasteboardSync,
 };
