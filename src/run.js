@@ -189,6 +189,7 @@ async function runFrontend(
     platform,
     name,
     output,
+    backendPort,
     metroPort,
     rebuild,
     forceEmulatorUpdates,
@@ -212,6 +213,11 @@ async function runFrontend(
   if (forceEmulatorUpdates && !['ios', 'android', 'mobile'].includes(platform)) {
     throw new Error('--force is only valid for iOS, Android, or mobile runs.');
   }
+  if (backendPort !== undefined && !['ios', 'android', 'mobile'].includes(platform)) {
+    throw new Error(
+      '--backend-port is only valid for iOS, Android, or mobile runs.'
+    );
+  }
   requireFrontend(outputDir);
   doctorWebForRun();
   if (['ios', 'android', 'mobile'].includes(platform) && dependencies.maintainMobileStorage) {
@@ -222,7 +228,12 @@ async function runFrontend(
     }
   }
   const selectedEnvironment = normalizeEnvironment(environment);
-  writeRuntimeConfigForRun(outputDir, selectedEnvironment, platform);
+  writeRuntimeConfigForRun(
+    outputDir,
+    selectedEnvironment,
+    platform,
+    { backendPort }
+  );
   process.env.ONRAMP_ENVIRONMENT = selectedEnvironment;
 
   if (platform === 'web') {

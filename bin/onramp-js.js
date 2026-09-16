@@ -16,7 +16,7 @@ function printUsage() {
   onramp-js add <ios | android | mobile> [--output <directory>]
   onramp-js doctor [web | ios | android | mobile | all]
   onramp-js storage [--check | --clean] [--include-other-projects]
-  onramp-js run <web | ios | android | mobile> [--output <directory>] [--environment <development | staging | production>] [--metro-port <port>] [--watch-diagnostics] [--rebuild] [--force]
+  onramp-js run <web | ios | android | mobile> [--output <directory>] [--environment <development | staging | production>] [--backend-port <port>] [--metro-port <port>] [--watch-diagnostics] [--rebuild] [--force]
   onramp-js repair ios [--output <directory>] [--fresh]
   onramp-js upgrade [--output <directory>] [--check]
 
@@ -33,6 +33,7 @@ Options:
   --mobile  Include both iOS and Android projects
   --all     Include every supported platform
   --metro-port  Select a free port to use for the native Metro bundler
+  --backend-port  Use this local Python backend port in native runtime URLs
   --environment  Select the development, staging, or production app profile
   --watch-diagnostics  Log source paths that can trigger native Fast Refresh
   --rebuild  Force a fresh native app build instead of reusing an unchanged installation
@@ -140,13 +141,26 @@ function parseRunArgs(args) {
 
   for (let index = 0; index < args.length; index += 1) {
     const argument = args[index];
-    if (argument === '--name' || argument === '--output' || argument === '--metro-port' || argument === '--environment') {
+    if (
+      argument === '--name'
+      || argument === '--output'
+      || argument === '--backend-port'
+      || argument === '--metro-port'
+      || argument === '--environment'
+    ) {
       const value = args[index + 1];
       if (!value || value.startsWith('--')) {
         throw new Error(`Missing value for ${argument}`);
       }
       if (argument === '--metro-port') {
         options.metroPort = normalizePort(value);
+      } else if (argument === '--backend-port') {
+        if (!['ios', 'android', 'mobile'].includes(platform)) {
+          throw new Error(
+            '--backend-port is only valid for iOS, Android, or mobile runs.'
+          );
+        }
+        options.backendPort = normalizePort(value, 'Backend port');
       } else if (argument === '--environment') {
         options.environment = value;
       } else {

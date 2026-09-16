@@ -46,6 +46,33 @@ test('parses a native Metro port separately from the output directory', () => {
   assert.equal(options.output, '/tmp/example');
 });
 
+test('parses and validates a native backend port separately from Metro', () => {
+  const options = parseRunArgs([
+    'mobile',
+    '--backend-port',
+    '8123',
+    '--metro-port',
+    '9090',
+  ]);
+
+  assert.equal(options.backendPort, 8123);
+  assert.equal(options.metroPort, 9090);
+  for (const value of ['0', '65536', '8000.5', 'invalid']) {
+    assert.throws(
+      () => parseRunArgs(['ios', '--backend-port', value]),
+      /Backend port must be an integer between 1 and 65535/
+    );
+  }
+  assert.throws(
+    () => parseRunArgs(['ios', '--backend-port']),
+    /Missing value for --backend-port/
+  );
+  assert.throws(
+    () => parseRunArgs(['web', '--backend-port', '8123']),
+    /only valid for iOS, Android, or mobile/
+  );
+});
+
 test('parses a shared staging environment for frontend and native runs', () => {
   const options = parseRunArgs(['mobile', '--environment', 'staging']);
 

@@ -61,6 +61,28 @@ test('force is rejected on web, repair, and upgrade without becoming a generic y
   }), /only valid for iOS, Android, or mobile/);
 });
 
+test('frontend routing forwards the selected backend port to runtime config', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'onramp-backend-port-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(root, 'package.json'), '{}');
+  const runtimeCalls = [];
+  await runFrontend(
+    {platform: 'mobile', output: root, backendPort: 8123},
+    {
+      doctorWeb() {},
+      monitorNativeBuildInputs() {},
+      runMobile: async () => ({}),
+      writeRuntimeConfig(...args) { runtimeCalls.push(args); },
+    }
+  );
+  assert.deepEqual(runtimeCalls, [[
+    root,
+    'development',
+    'mobile',
+    {backendPort: 8123},
+  ]]);
+});
+
 for (const forceEmulatorUpdates of [undefined, false, true]) {
   test(`mobile enables obsolete cleanup only with force and finishes both preflights before Metro (force=${forceEmulatorUpdates})`, async () => {
     const calls = [];

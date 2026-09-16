@@ -68,6 +68,62 @@ test('resolves platform URLs and writes one universal runtime profile', () => {
 });
 
 
+test('writes a selected local backend port into every native runtime URL', () => {
+  const root = project();
+  const appJsonPath = path.join(root, 'app.json');
+  const appJson = JSON.parse(fs.readFileSync(appJsonPath, 'utf8'));
+  appJson.environments.development.apiBaseUrl = {
+    web: 'http://localhost/api',
+    ios: 'http://127.0.0.1:9000/api/v1',
+    android: 'http://10.0.2.2/native',
+  };
+  fs.writeFileSync(appJsonPath, JSON.stringify(appJson));
+
+  writeRuntimeConfig(
+    root,
+    'development',
+    'mobile',
+    {backendPort: 8123}
+  );
+  const runtime = JSON.parse(
+    fs.readFileSync(path.join(root, 'src', 'generated', 'runtime-config.json'))
+  );
+  assert.equal(runtime.apiBaseUrl.web, 'http://localhost:8123/api');
+  assert.equal(runtime.apiBaseUrl.ios, 'http://127.0.0.1:8123/api/v1');
+  assert.equal(runtime.apiBaseUrl.android, 'http://10.0.2.2:8123/native');
+  assert.deepEqual(
+    JSON.parse(fs.readFileSync(appJsonPath, 'utf8')),
+    appJson
+  );
+});
+
+
+test('backend-port overrides preserve nonlocal and non-HTTP runtime URLs', () => {
+  const root = project();
+  const appJsonPath = path.join(root, 'app.json');
+  const appJson = JSON.parse(fs.readFileSync(appJsonPath, 'utf8'));
+  appJson.environments.development.apiBaseUrl = {
+    web: 'https://localhost:4443/api',
+    ios: 'https://api.example.com/v1',
+    android: 'http://192.168.1.5:8000/api',
+  };
+  fs.writeFileSync(appJsonPath, JSON.stringify(appJson));
+
+  writeRuntimeConfig(
+    root,
+    'development',
+    'mobile',
+    {backendPort: 8123}
+  );
+  const runtime = JSON.parse(
+    fs.readFileSync(path.join(root, 'src', 'generated', 'runtime-config.json'))
+  );
+  assert.equal(runtime.apiBaseUrl.web, 'https://localhost:4443/api');
+  assert.equal(runtime.apiBaseUrl.ios, 'https://api.example.com/v1');
+  assert.equal(runtime.apiBaseUrl.android, 'http://192.168.1.5:8000/api');
+});
+
+
 test('applies environment identity suffixes only to the prepared native build', () => {
   const root = project();
   const staging = prepareNativeConfig(root, null, 'staging');

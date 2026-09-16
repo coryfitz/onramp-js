@@ -2,6 +2,13 @@ const fs = require('fs');
 const path = require('path');
 
 const ENVIRONMENTS = ['development', 'staging', 'production'];
+const LOCAL_BACKEND_HOSTS = new Set([
+  'localhost',
+  '127.0.0.1',
+  '[::1]',
+  '::1',
+  '10.0.2.2',
+]);
 
 function normalizeEnvironment(value = process.env.ONRAMP_ENVIRONMENT || 'development') {
   const environment = String(value).trim().toLowerCase();
@@ -41,12 +48,45 @@ function resolveEnvironmentProfile(outputDir, requested, platform = 'web') {
   };
 }
 
-function writeRuntimeConfig(outputDir, requested, platform) {
+function normalizeBackendPort(value) {
+  if (value === undefined || value === null || value === '') return undefined;
+  const port = Number(value);
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    throw new Error('Backend port must be an integer between 1 and 65535.');
+  }
+  return port;
+}
+
+function withLocalBackendPort(apiBaseUrl, backendPort) {
+  if (!apiBaseUrl || backendPort === undefined) return apiBaseUrl;
+  let parsed;
+  try {
+    parsed = new URL(apiBaseUrl);
+  } catch (_) {
+    return apiBaseUrl;
+  }
+  if (
+    parsed.protocol !== 'http:'
+    || parsed.username
+    || parsed.password
+    || !LOCAL_BACKEND_HOSTS.has(parsed.hostname)
+  ) {
+    return apiBaseUrl;
+  }
+  parsed.port = String(backendPort);
+  return parsed.toString().replace(/\/$/, '');
+}
+
+function writeRuntimeConfig(outputDir, requested, platform, options = {}) {
   const profile = resolveEnvironmentProfile(outputDir, requested, platform);
+  const backendPort = normalizeBackendPort(options.backendPort);
   const apiBaseUrl = Object.fromEntries(
     ['web', 'ios', 'android'].map(target => [
       target,
-      resolveEnvironmentProfile(outputDir, requested, target).apiBaseUrl,
+      withLocalBackendPort(
+        resolveEnvironmentProfile(outputDir, requested, target).apiBaseUrl,
+        backendPort
+      ),
     ])
   );
   const destination = path.join(outputDir, 'src', 'generated', 'runtime-config.json');
