@@ -18,7 +18,10 @@ const { ensureIosPodsDeploymentTarget } = require('./ios-pods-deployment-target'
 const IOS_DESTINATION_QUERY_ATTEMPTS = 3;
 const IOS_DESTINATION_RETRY_DELAY_MS = 500;
 const IOS_RUNTIME_DOWNLOAD_RETRY_MS = 24 * 60 * 60 * 1000;
+const IOS_SIMULATOR_SHUTDOWN_TIMEOUT_MS = 30000;
+const IOS_SIMULATOR_SHUTDOWN_POLL_MS = 250;
 const SYSTEM_ENV = '/usr/bin/env';
+const SYSTEM_DEFAULTS = '/usr/bin/defaults';
 const SYSTEM_SUDO = '/usr/bin/sudo';
 const SYSTEM_XCODEBUILD = '/usr/bin/xcodebuild';
 const SYSTEM_XCRUN = '/usr/bin/xcrun';
@@ -1278,20 +1281,22 @@ function activateIosSimulator(environment, captureCommand = capture) {
   return result.status === 0;
 }
 
-function showIosSimulator(
-  simulator,
+function resolveIosSimulatorApplication(
   environment,
   captureCommand = capture,
   pathExists = fs.existsSync
 ) {
-  const xcodeSelect = environment.xcodeSelect
-    || findExecutable('xcode-select', environment.env);
-  if (!xcodeSelect) {
-    throw new Error('xcode-select was not found on PATH.');
+  let developerDir = environment.developerDir;
+  if (!developerDir) {
+    const xcodeSelect = environment.xcodeSelect
+      || findExecutable('xcode-select', environment.env);
+    if (!xcodeSelect) {
+      throw new Error('xcode-select was not found on PATH.');
+    }
+    developerDir = captureCommand(xcodeSelect, ['-p'], {
+      env: environment.env,
+    }).stdout.trim();
   }
-  const developerDir = captureCommand(xcodeSelect, ['-p'], {
-    env: environment.env,
-  }).stdout.trim();
   const simulatorApp = path.join(
     developerDir,
     'Applications',
@@ -1304,24 +1309,337 @@ function showIosSimulator(
     'DeviceHub.app'
   );
 
-  let result;
   if (pathExists(simulatorApp)) {
+    return { kind: 'simulator', path: simulatorApp };
+  }
+  if (pathExists(deviceHubApp)) {
+    return { kind: 'device-hub', path: deviceHubApp };
+  }
+  throw new Error('Could not locate Simulator.app or DeviceHub.app.');
+}
+
+function iosHostKeyboardPreference(application) {
+  if (application === 'device-hub') {
+    return {
+      // Device Hub is sandboxed. Xcode 27's supported defaults CLI form uses
+      // its container and preferences domain as separate arguments.
+      args: ['-container', 'com.apple.dt.Devices'],
+      domain: 'com.apple.dt.Devices',
+      guidance: 'Open Device Hub > Settings > Interaction and enable '
+        + '“Always simulate hardware keyboard.” If this simulator is already '
+        + 'connected, choose Device > Keyboard > Simulate Hardware Keyboard for '
+        + 'that device.',
+      key: 'alwaysSimulateHardwareKeyboard',
+      label: 'Xcode Device Hub',
+    };
+  }
+  if (application === 'simulator') {
+    return {
+      // Simulator predates the sandboxed Device Hub preferences container.
+      args: [],
+      domain: 'com.apple.iphonesimulator',
+      guidance: 'Open Simulator and choose I/O > Keyboard > '
+        + 'Connect Hardware Keyboard.',
+      key: 'ConnectHardwareKeyboard',
+      label: 'Simulator',
+    };
+  }
+  throw new Error(`Unknown iOS simulator application: ${application}`);
+}
+
+function configureIosHostKeyboard(
+  application,
+  environment,
+  captureCommand = capture,
+  warn = console.warn,
+  log = console.log
+) {
+  const preference = iosHostKeyboardPreference(application);
+  const reportFailure = message => {
+    const punctuation = /[.!?]$/.test(message) ? '' : '.';
+    const explanation = `${message}${punctuation} ${preference.guidance}`;
+    warn(`Warning: ${explanation}`);
+    return { changed: false, enabled: false };
+  };
+  const readPreference = () => captureCommand(
+    SYSTEM_DEFAULTS,
+    [
+      ...preference.args,
+      'read',
+      preference.domain,
+      preference.key,
+    ],
+    { env: environment.env, check: false }
+  );
+  const isEnabled = result => (
+    result.status === 0
+    && ['1', 'true', 'yes'].includes(result.stdout.trim().toLowerCase())
+  );
+
+  try {
+    const current = readPreference();
+    if (isEnabled(current)) {
+      log(
+        application === 'device-hub'
+          ? '✓ Xcode Device Hub hardware-keyboard default is enabled'
+          : `✓ Mac keyboard input is enabled in ${preference.label}`
+      );
+      return { changed: false, enabled: true };
+    }
+  } catch (_error) {
+    // A missing preference, inaccessible container, or older defaults command
+    // may make the initial read fail. The narrow write below is still worth
+    // attempting and is always followed by a fresh verification read.
+  }
+
+  let write;
+  try {
+    write = captureCommand(
+      SYSTEM_DEFAULTS,
+      [
+        ...preference.args,
+        'write',
+        preference.domain,
+        preference.key,
+        '-bool',
+        'true',
+      ],
+      { env: environment.env, check: false }
+    );
+  } catch (error) {
+    return reportFailure(
+      `OnRamp could not enable Mac keyboard input in ${preference.label}: `
+      + `${error.message}.`
+    );
+  }
+
+  if (write.status !== 0) {
+    const detail = (write.stderr || write.stdout || '').trim();
+    return reportFailure(
+      `OnRamp could not enable Mac keyboard input in ${preference.label}`
+      + `${detail ? `: ${detail}` : '.'}`
+    );
+  }
+
+  let read;
+  try {
+    read = readPreference();
+  } catch (error) {
+    return reportFailure(
+      `OnRamp updated ${preference.label}'s Mac keyboard setting, but could not `
+      + `verify it: ${error.message}.`
+    );
+  }
+
+  if (!isEnabled(read)) {
+    const detail = (read.stderr || read.stdout || '').trim();
+    return reportFailure(
+      `OnRamp updated ${preference.label}'s Mac keyboard setting, but it did not `
+      + `read back as enabled${detail ? ` (${detail})` : ''}.`
+    );
+  }
+
+  log(
+    application === 'device-hub'
+      ? '✓ Xcode Device Hub hardware-keyboard default is enabled'
+      : `✓ Mac keyboard input is enabled in ${preference.label}`
+  );
+  return { changed: true, enabled: true };
+}
+
+async function restartIosSimulatorForDeviceHubKeyboard(
+  simulator,
+  environment,
+  options = {}
+) {
+  const captureCommand = options.captureCommand || capture;
+  const delay = options.delay || wait;
+  const now = options.now || Date.now;
+  const simulatorState = options.simulatorState || iosSimulatorState;
+  const timeoutMs = options.timeoutMs ?? IOS_SIMULATOR_SHUTDOWN_TIMEOUT_MS;
+  const pollMs = options.pollMs ?? IOS_SIMULATOR_SHUTDOWN_POLL_MS;
+  const initialState = options.initialState ?? simulatorState(
+    simulator.id,
+    environment,
+    captureCommand
+  );
+  if (initialState !== 'Booted' && initialState !== 'Booting') {
+    return {
+      initialState,
+      restarted: false,
+      safeForNewConnection: initialState === 'Shutdown',
+    };
+  }
+
+  const shutdown = captureCommand(
+    environment.xcrun,
+    ['simctl', 'shutdown', simulator.id],
+    { env: environment.env, check: false }
+  );
+  let state = simulatorState(simulator.id, environment, captureCommand);
+  if (shutdown.status !== 0 && state !== 'Shutdown') {
+    const detail = (shutdown.stderr || shutdown.stdout || '').trim();
+    return {
+      detail,
+      initialState,
+      restarted: false,
+      safeForNewConnection: false,
+      state,
+    };
+  }
+
+  const startedAt = now();
+  while (state !== 'Shutdown' && now() - startedAt < timeoutMs) {
+    await delay(pollMs);
+    state = simulatorState(simulator.id, environment, captureCommand);
+  }
+  if (state !== 'Shutdown') {
+    return {
+      detail: `the exact simulator did not shut down within `
+        + `${Math.round(timeoutMs / 1000)} seconds`,
+      initialState,
+      restarted: false,
+      safeForNewConnection: false,
+      state,
+    };
+  }
+
+  return {
+    initialState,
+    restarted: true,
+    safeForNewConnection: true,
+    state,
+  };
+}
+
+async function prepareIosHostKeyboard(
+  simulator,
+  environment,
+  options = {}
+) {
+  const captureCommand = options.captureCommand || capture;
+  const pathExists = options.pathExists || fs.existsSync;
+  const warn = options.warn || console.warn;
+  const log = options.log || console.log;
+  const application = options.application || resolveIosSimulatorApplication(
+    environment,
+    captureCommand,
+    pathExists
+  );
+  const preference = configureIosHostKeyboard(
+    application.kind,
+    environment,
+    captureCommand,
+    warn,
+    log
+  );
+  if (application.kind !== 'device-hub' || !preference.enabled) {
+    return {
+      application,
+      connectionVerified: preference.enabled,
+      preference,
+    };
+  }
+
+  const simulatorState = options.simulatorState || iosSimulatorState;
+  let state = simulatorState(simulator.id, environment, captureCommand);
+  let reconnect = {
+    initialState: state,
+    restarted: false,
+    safeForNewConnection: state === 'Shutdown',
+  };
+  if (preference.changed && (state === 'Booted' || state === 'Booting')) {
+    log(
+      `Restarting ${simulator.name} so Xcode Device Hub applies its `
+      + 'hardware-keyboard setting to a new connection...'
+    );
+    reconnect = await restartIosSimulatorForDeviceHubKeyboard(
+      simulator,
+      environment,
+      {
+        captureCommand,
+        delay: options.delay,
+        initialState: state,
+        now: options.now,
+        pollMs: options.pollMs,
+        simulatorState,
+        timeoutMs: options.timeoutMs,
+      }
+    );
+    state = reconnect.state || state;
+    if (reconnect.restarted) {
+      log(`✓ ${simulator.name} disconnected safely for its keyboard update`);
+    }
+  }
+
+  const connectionVerified = reconnect.safeForNewConnection;
+  if (!connectionVerified) {
+    const detail = reconnect.detail ? ` (${reconnect.detail})` : '';
+    warn(
+      `Warning: Xcode Device Hub's hardware-keyboard default is enabled, but `
+      + `OnRamp cannot verify it for the existing ${simulator.name} connection`
+      + `${detail}. In Device Hub, choose Device > Keyboard > Simulate Hardware `
+      + 'Keyboard for that device.'
+    );
+  }
+  return {
+    application,
+    connectionVerified,
+    preference,
+    reconnect,
+    state,
+  };
+}
+
+function showIosSimulator(
+  simulator,
+  environment,
+  captureCommand = capture,
+  pathExists = fs.existsSync,
+  preparedApplication = null
+) {
+  const application = preparedApplication || resolveIosSimulatorApplication(
+    environment,
+    captureCommand,
+    pathExists
+  );
+  if (!preparedApplication) {
+    // Keep direct callers compatible, but never describe Device Hub's default
+    // as proof that an already-connected device adopted it. The normal launch
+    // path configures and, when needed, reconnects before simulator boot.
+    const preference = configureIosHostKeyboard(
+      application.kind,
+      environment,
+      captureCommand
+    );
+    if (application.kind === 'device-hub' && preference.enabled) {
+      console.warn(
+        `Warning: Xcode Device Hub's hardware-keyboard default is enabled, but `
+        + `OnRamp cannot verify it for the existing ${simulator.name} connection. `
+        + 'In Device Hub, choose Device > Keyboard > Simulate Hardware Keyboard '
+        + 'for that device.'
+      );
+    }
+  }
+
+  let result;
+  if (application.kind === 'simulator') {
     result = captureCommand(
       'open',
-      [simulatorApp, '--args', '-CurrentDeviceUDID', simulator.id],
+      [application.path, '--args', '-CurrentDeviceUDID', simulator.id],
       { env: environment.env, check: false }
     );
     if (result.status === 0) {
       activateIosSimulator(environment, captureCommand);
     }
-  } else if (pathExists(deviceHubApp)) {
+  } else if (application.kind === 'device-hub') {
     result = captureCommand(
       'open',
       [`devices://device/open?id=${simulator.id}`],
       { env: environment.env, check: false }
     );
   } else {
-    throw new Error('Could not locate Simulator.app or DeviceHub.app.');
+    throw new Error(`Unknown iOS simulator application: ${application.kind}`);
   }
 
   if (result.status !== 0) {
@@ -1658,6 +1976,10 @@ async function prepareIosDevelopment({
     // once an actually usable replacement has been selected and verified.
     await offerIosRuntimeCleanup(environment, { cleanupObsolete, simulatorId: simulator.id });
   }
+  const hostKeyboard = await prepareIosHostKeyboard(
+    simulator,
+    environment
+  );
   const bundleIdentifier = resolvedIosBundleIdentifier(
     outputDir,
     iosDir,
@@ -1669,8 +1991,10 @@ async function prepareIosDevelopment({
   return {
     bundleIdentifier,
     environment,
+    hostKeyboard,
     outputDir,
     simulator,
+    simulatorApplication: hostKeyboard.application,
   };
 }
 
@@ -1687,12 +2011,36 @@ async function launchPreparedIos(
   const {
     bundleIdentifier,
     environment,
+    hostKeyboard,
     outputDir,
     simulator,
+    simulatorApplication,
   } = prepared;
+  const resolvedSimulatorApplication = simulatorApplication
+    || hostKeyboard?.application
+    || resolveIosSimulatorApplication(environment);
+  const resolvedHostKeyboard = hostKeyboard || await prepareIosHostKeyboard(
+    simulator,
+    environment,
+    { application: resolvedSimulatorApplication }
+  );
   console.log('Starting iOS simulator...');
   ensureIosSimulatorBooted(simulator, environment);
-  showIosSimulator(simulator, environment);
+  showIosSimulator(
+    simulator,
+    environment,
+    capture,
+    fs.existsSync,
+    resolvedSimulatorApplication
+  );
+  if (
+    resolvedSimulatorApplication.kind === 'device-hub'
+    && resolvedHostKeyboard?.connectionVerified
+  ) {
+    console.log(
+      `✓ Mac keyboard input is enabled for ${simulator.name} in Xcode Device Hub`
+    );
+  }
   const metro = await startMetro({
     output: outputDir,
     requestedPort: metroPort,
@@ -1818,6 +2166,7 @@ module.exports = {
   availableIosSimulatorRuntimes,
   availableIosSimulatorRuntimeVersions,
   doctorIos,
+  configureIosHostKeyboard,
   ensureEligibleIosSimulator,
   ensureIosSimulatorBooted,
   ensurePreferredIosSimulatorRuntime,
@@ -1841,9 +2190,12 @@ module.exports = {
   launchPreparedIos,
   prepareIosDevelopment,
   prepareIosEnvironment,
+  prepareIosHostKeyboard,
   queryEligibleIosSimulatorsWithRetry,
   repairIos,
+  resolveIosSimulatorApplication,
   resolveSelectedDeveloperDir,
+  restartIosSimulatorForDeviceHubKeyboard,
   runIos,
   selectIosSimulator,
   showIosSimulator,

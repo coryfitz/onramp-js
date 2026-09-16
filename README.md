@@ -202,6 +202,18 @@ the app, avoiding cold-start bundle timeouts on newly generated projects.
 The iOS simulator connects to Metro through the numeric IPv4 loopback address,
 avoiding repeated Fast Refresh disconnects caused by `localhost` resolution in
 iOS 26 simulator runtimes.
+Native launches also configure host-keyboard input before opening the selected
+device. OnRamp verifies the appropriate legacy Simulator or Xcode Device Hub
+preference on macOS. If it changes Device Hub's new-connection default while
+the selected simulator is active, OnRamp restarts only that simulator without
+wiping its apps or data. When an existing Device Hub connection cannot be
+proven to have adopted the default, or macOS denies the narrow preference
+access, OnRamp does not claim keyboard forwarding is active and prints the
+exact per-device menu to use. For Android, it repairs only AVDs in the reserved
+`OnRamp_API_*` namespace whose metadata matches OnRamp's canonical structure;
+an already-running matching AVD may cold-start once for the setting to take
+effect, without wiping its installed apps or data. AVDs outside that namespace
+and ambiguous metadata are left unchanged with manual keyboard guidance.
 On macOS, Metro uses its native file watcher. Cloud sync, indexing, and similar
 services can still emit metadata-only dependency events even though no module
 contents changed. OnRamp lets Metro calculate each delta, suppresses only HMR

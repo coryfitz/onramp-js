@@ -152,6 +152,12 @@ taskbar button.
 Linux uses Sway directly or optional `wmctrl`/`xdotool` X11 tools. Generic pure
 Wayland desktops control focus themselves, so OnRamp may ask you to select the
 emulator from the task switcher even though the app launched successfully.
+OnRamp enables host-keyboard input for reusable AVDs in its reserved
+`OnRamp_API_*` namespace when their metadata matches the canonical OnRamp
+structure. If an older matching AVD was created with keyboard input disabled,
+the next launch may cold-start that device once to repair it; installed apps
+and device data are preserved. AVDs outside the reserved namespace are left
+unchanged with manual keyboard guidance.
 
 ### iOS (macOS only)
 
@@ -159,7 +165,14 @@ emulator from the task switcher even though the app launched successfully.
 
 `onramp-js run ios` installs Pods, checks Apple's preferred compatible
 Simulator runtime, and asks before downloading a missing or newer runtime.
-Xcode supplies the Simulator application itself.
+Xcode supplies the Simulator application itself. Before booting or opening the
+selected device, OnRamp enables and verifies host-keyboard simulation for
+either legacy Simulator or Xcode Device Hub. If a Device Hub default must
+change while the selected simulator is active, OnRamp restarts only that
+simulator without wiping its apps or data. If an existing connection cannot be
+verified, or macOS denies the narrow preference access, launch continues
+without claiming keyboard forwarding is active and prints the exact per-device
+menu to use.
 
 `npx onramp-js repair ios` preserves `Podfile.lock`. Add `--fresh` only when a
 new native dependency resolution is intentional.

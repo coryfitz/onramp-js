@@ -69,11 +69,10 @@ jobs:
           node-version: "22"
           package-manager-cache: false
 
-      - name: Test native Windows emulator targeting
-        run: >-
-          node --test
-          --test-name-pattern="Windows|real host listener"
-          test/android.test.js
+      - name: Test native Windows emulator targeting and keyboard safety
+        run: |
+          node --test --test-name-pattern="Windows|real host listener" test/android.test.js
+          node --test test/android-keyboard.test.js
 
   publish:
     needs: [check_version, windows_foreground_check]

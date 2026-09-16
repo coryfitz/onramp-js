@@ -1,4 +1,5 @@
 const fs = require('fs');
+const crypto = require('crypto');
 const os = require('os');
 const path = require('path');
 const { spawn } = require('child_process');
@@ -36,8 +37,11 @@ const { promptYesNo } = require('./prompt');
 const MIN_CLIPBOARD_EMULATOR_VERSION = [33, 1, 23];
 const EMULATOR_BOOT_TIMEOUT_MS = 180000;
 const EMULATOR_BOOT_POLL_MS = 1000;
+const EMULATOR_SHUTDOWN_TIMEOUT_MS = 30000;
+const EMULATOR_SHUTDOWN_POLL_MS = 250;
 const MIN_SHARP_AVD_DENSITY = 280;
 const MIN_SHARP_AVD_SHORT_SIDE = 720;
+const ONRAMP_ANDROID_AVD_NAME = /^OnRamp_API_\d+(?:_\d+)*$/;
 const MACOS_ANDROID_EMULATOR_ACTIVATION_SCRIPT = `
 on run argv
   set emulatorPid to item 1 of argv as integer
@@ -451,6 +455,472 @@ function androidAvdMetadata(avd, sdk, env) {
   };
 }
 
+function requireOwnedAndroidAvdPath(target, kind, avd, expectedType) {
+  let stat;
+  try {
+    stat = fs.lstatSync(target);
+  } catch (_error) {
+    throw new Error(
+      `Android virtual device ${avd} has no readable ${kind} metadata.`
+    );
+  }
+  const expected = expectedType === 'directory'
+    ? stat.isDirectory()
+    : stat.isFile();
+  if (
+    !expected
+    || stat.isSymbolicLink()
+    || (expectedType === 'file' && stat.nlink !== 1)
+    || (
+      typeof process.getuid === 'function'
+      && stat.uid !== process.getuid()
+    )
+  ) {
+    throw new Error(
+      `Android virtual device ${avd} has unsafe ${kind} metadata; `
+      + 'OnRamp did not modify it.'
+    );
+  }
+  return stat;
+}
+
+function inspectOnRampAndroidAvdHostKeyboard(environment, options = {}) {
+  const { avd, env } = environment;
+  if (!ONRAMP_ANDROID_AVD_NAME.test(String(avd || ''))) {
+    return { managed: false, needsChange: false };
+  }
+
+  const sdk = environment.sdk
+    || env.ANDROID_SDK_ROOT
+    || env.ANDROID_HOME;
+  if (!sdk) {
+    throw new Error(
+      `Android virtual device ${avd} cannot be verified without its Android SDK path.`
+    );
+  }
+  const verified = inspectAndroidAvdForCleanup(
+    avd,
+    sdk,
+    env,
+    options.processStateFn || androidCleanupProcessState
+  );
+  if (!verified) {
+    throw new Error(
+      `Android virtual device ${avd} could not be safely verified as `
+      + 'OnRamp-owned; OnRamp did not modify it.'
+    );
+  }
+  const avdHome = androidAvdHome(env);
+  requireOwnedAndroidAvdPath(avdHome, 'AVD home', avd, 'directory');
+  requireOwnedAndroidAvdPath(
+    path.join(avdHome, `${avd}.ini`),
+    'locator',
+    avd,
+    'file'
+  );
+  const directory = verified.directory;
+  const configPath = path.join(directory, 'config.ini');
+  const directoryStat = requireOwnedAndroidAvdPath(
+    directory,
+    'directory',
+    avd,
+    'directory'
+  );
+  const configStat = requireOwnedAndroidAvdPath(
+    configPath,
+    'configuration',
+    avd,
+    'file'
+  );
+
+  const locator = parseIni(verified.locatorContents);
+  const configuredPath = locator.get('path');
+  const relativePath = locator.get('path.rel');
+  if (!configuredPath && !relativePath) {
+    throw new Error(
+      `Android virtual device ${avd} has an ambiguous locator; `
+      + 'OnRamp did not modify it.'
+    );
+  }
+  const config = parseIni(verified.configContents);
+  const keyboard = config.get('hw.keyboard');
+  if (keyboard !== undefined && keyboard !== 'yes' && keyboard !== 'no') {
+    throw new Error(
+      `Android virtual device ${avd} has a malformed hw.keyboard setting; `
+      + 'OnRamp did not modify it.'
+    );
+  }
+  const lines = verified.configContents.split(/\r?\n/);
+  const keyboardLine = lines.findIndex(line => (
+    line.slice(0, line.indexOf('=')).trim() === 'hw.keyboard'
+  ));
+  return {
+    captureFn: options.captureFn || capture,
+    configContents: verified.configContents,
+    configPath,
+    configStat,
+    directory,
+    directoryStat,
+    environment,
+    keyboard,
+    keyboardLine: keyboardLine < 0 ? undefined : keyboardLine,
+    lines,
+    locked: verified.locked,
+    managed: true,
+    needsChange: keyboard !== 'yes',
+    processStateFn: options.processStateFn || androidCleanupProcessState,
+    realDirectory: fs.realpathSync(directory),
+  };
+}
+
+function androidAvdLockRecord(directory, name, options = {}) {
+  const target = path.join(directory, name);
+  const noFollow = fs.constants.O_NOFOLLOW || 0;
+  let file;
+  try {
+    const pathStat = fs.lstatSync(target);
+    if (
+      !pathStat.isFile()
+      || pathStat.isSymbolicLink()
+      || pathStat.nlink !== 1
+      || (
+        typeof process.getuid === 'function'
+        && pathStat.uid !== process.getuid()
+      )
+      || (options.empty && pathStat.size !== 0)
+      || (
+        options.maxSize !== undefined
+        && pathStat.size > options.maxSize
+      )
+    ) {
+      return null;
+    }
+    file = fs.openSync(target, fs.constants.O_RDONLY | noFollow);
+    const openedStat = fs.fstatSync(file);
+    if (
+      !sameAndroidAvdFile(openedStat, pathStat)
+      || openedStat.size !== pathStat.size
+      || openedStat.mtimeMs !== pathStat.mtimeMs
+      || openedStat.ctimeMs !== pathStat.ctimeMs
+    ) {
+      return null;
+    }
+    const contents = fs.readFileSync(file, 'utf8');
+    const finalStat = fs.fstatSync(file);
+    if (
+      finalStat.size !== openedStat.size
+      || finalStat.mtimeMs !== openedStat.mtimeMs
+      || finalStat.ctimeMs !== openedStat.ctimeMs
+    ) {
+      return null;
+    }
+    return {
+      contents,
+      ctimeMs: finalStat.ctimeMs,
+      dev: finalStat.dev,
+      ino: finalStat.ino,
+      mtimeMs: finalStat.mtimeMs,
+      name,
+      size: finalStat.size,
+      uid: finalStat.uid,
+    };
+  } catch (_error) {
+    return null;
+  } finally {
+    if (file !== undefined) {
+      fs.closeSync(file);
+    }
+  }
+}
+
+function androidAvdLockFingerprint(record) {
+  return record && JSON.stringify([
+    record.name,
+    record.dev,
+    record.ino,
+    record.size,
+    record.mtimeMs,
+    record.ctimeMs,
+    record.uid,
+    record.contents,
+  ]);
+}
+
+function androidAvdHasOwnedCompanionOnlyLock(directory) {
+  let names;
+  try {
+    names = fs.readdirSync(directory)
+      .filter(name => /\.lock$/.test(name))
+      .sort();
+  } catch (_error) {
+    return false;
+  }
+  return (
+    names.length === 1
+    && names[0] === 'multiinstance.lock'
+    && Boolean(androidAvdLockRecord(
+      directory,
+      'multiinstance.lock',
+      { empty: true }
+    ))
+  );
+}
+
+function androidAvdShutdownProofPermitsCompanionLock(
+  inspection,
+  proof,
+  allowPendingProof
+) {
+  if (
+    !proof
+    || (!allowPendingProof && proof.shutdownConfirmed !== true)
+    || proof.avd !== inspection.environment.avd
+    || proof.directoryDev !== inspection.directoryStat.dev
+    || proof.directoryIno !== inspection.directoryStat.ino
+    || !Number.isSafeInteger(proof.ownerPid)
+    || !/^emulator-\d+$/.test(String(proof.serial || ''))
+    || typeof proof.hardwareFingerprint !== 'string'
+    || inspection.processStateFn(proof.ownerPid) !== 'dead'
+  ) {
+    return false;
+  }
+  let names;
+  try {
+    names = fs.readdirSync(inspection.directory)
+      .filter(name => /\.lock$/.test(name))
+      .sort();
+  } catch (_error) {
+    return false;
+  }
+  if (names.length !== 1 || names[0] !== 'multiinstance.lock') {
+    return false;
+  }
+  const companion = androidAvdLockRecord(
+    inspection.directory,
+    'multiinstance.lock',
+    { empty: true }
+  );
+  return (
+    Boolean(companion)
+    && androidAvdLockFingerprint(companion) === proof.companionFingerprint
+  );
+}
+
+function androidAvdKeyboardLocksPermitUpdate(
+  inspection,
+  shutdownProof = null,
+  allowPendingProof = false
+) {
+  if (!selectedAndroidAvdIsDefinitelyAbsent(
+    inspection.environment,
+    inspection.captureFn
+  )) {
+    return false;
+  }
+  if (
+    shutdownProof
+    && (
+      shutdownProof.avd !== inspection.environment.avd
+      || shutdownProof.directoryDev !== inspection.directoryStat.dev
+      || shutdownProof.directoryIno !== inspection.directoryStat.ino
+      || (!allowPendingProof && shutdownProof.shutdownConfirmed !== true)
+      || !Number.isSafeInteger(shutdownProof.ownerPid)
+      || !/^emulator-\d+$/.test(String(shutdownProof.serial || ''))
+      || typeof shutdownProof.hardwareFingerprint !== 'string'
+      || inspection.processStateFn(shutdownProof.ownerPid) !== 'dead'
+    )
+  ) {
+    return false;
+  }
+  if (!androidAvdCleanupLocks(
+    inspection.directory,
+    inspection.processStateFn
+  ).locked) {
+    return true;
+  }
+  return androidAvdShutdownProofPermitsCompanionLock(
+    inspection,
+    shutdownProof,
+    allowPendingProof
+  );
+}
+
+function sameAndroidAvdFile(stat, expected) {
+  return (
+    stat.isFile()
+    && !stat.isSymbolicLink()
+    && stat.nlink === 1
+    && stat.dev === expected.dev
+    && stat.ino === expected.ino
+    && (
+      typeof process.getuid !== 'function'
+      || stat.uid === process.getuid()
+    )
+  );
+}
+
+function revalidateAndroidAvdConfig(inspection) {
+  const directoryStat = fs.lstatSync(inspection.directory);
+  if (
+    !directoryStat.isDirectory()
+    || directoryStat.isSymbolicLink()
+    || directoryStat.dev !== inspection.directoryStat.dev
+    || directoryStat.ino !== inspection.directoryStat.ino
+    || fs.realpathSync(inspection.directory) !== inspection.realDirectory
+  ) {
+    throw new Error('Android AVD directory changed before it could be updated.');
+  }
+  const configStat = fs.lstatSync(inspection.configPath);
+  if (!sameAndroidAvdFile(configStat, inspection.configStat)) {
+    throw new Error('Android AVD configuration changed before it could be updated.');
+  }
+  const noFollow = fs.constants.O_NOFOLLOW || 0;
+  const file = fs.openSync(
+    inspection.configPath,
+    fs.constants.O_RDONLY | noFollow
+  );
+  try {
+    const openedStat = fs.fstatSync(file);
+    const current = fs.readFileSync(file, 'utf8');
+    if (
+      !sameAndroidAvdFile(openedStat, inspection.configStat)
+      || current !== inspection.configContents
+    ) {
+      throw new Error('Android AVD configuration changed before it could be updated.');
+    }
+  } finally {
+    fs.closeSync(file);
+  }
+  // Keep this as the final check before rename. A just-stopped emulator may
+  // leave its companion lock behind, but only the exact shutdown proof captured
+  // while that AVD was live may make that otherwise-uncertain lock acceptable.
+  if (!androidAvdKeyboardLocksPermitUpdate(
+    inspection,
+    inspection.shutdownProof
+  )) {
+    throw new Error('Android AVD became active before it could be updated.');
+  }
+}
+
+function fsyncAndroidAvdDirectory(directory) {
+  let file;
+  try {
+    file = fs.openSync(directory, fs.constants.O_RDONLY);
+    fs.fsyncSync(file);
+  } catch (error) {
+    if (!['EINVAL', 'EISDIR', 'ENOTSUP', 'EPERM'].includes(error.code)) {
+      throw error;
+    }
+  } finally {
+    if (file !== undefined) {
+      fs.closeSync(file);
+    }
+  }
+}
+
+function writeOnRampAndroidAvdHostKeyboard(inspection) {
+  if (!inspection.managed || !inspection.needsChange) {
+    return false;
+  }
+  const lines = [...inspection.lines];
+  const keyboardLine = inspection.keyboardLine;
+  if (keyboardLine === undefined) {
+    const finalBlank = lines.length > 0 && lines.at(-1) === '';
+    lines.splice(finalBlank ? lines.length - 1 : lines.length, 0, 'hw.keyboard=yes');
+  } else {
+    lines[keyboardLine] = 'hw.keyboard=yes';
+  }
+  const newline = inspection.configContents.includes('\r\n') ? '\r\n' : '\n';
+  const updated = Buffer.from(lines.join(newline), 'utf8');
+  const tempPath = path.join(
+    inspection.directory,
+    `.config.ini.onramp-${process.pid}-${crypto.randomBytes(8).toString('hex')}.tmp`
+  );
+  const noFollow = fs.constants.O_NOFOLLOW || 0;
+  let tempFile;
+  let renamed = false;
+  try {
+    tempFile = fs.openSync(
+      tempPath,
+      fs.constants.O_WRONLY
+      | fs.constants.O_CREAT
+      | fs.constants.O_EXCL
+      | noFollow,
+      inspection.configStat.mode & 0o7777
+    );
+    if (process.platform !== 'win32') {
+      fs.fchmodSync(tempFile, inspection.configStat.mode & 0o7777);
+    }
+    let offset = 0;
+    while (offset < updated.length) {
+      const written = fs.writeSync(
+        tempFile,
+        updated,
+        offset,
+        updated.length - offset,
+        offset
+      );
+      if (written <= 0) {
+        throw new Error('Android AVD configuration could not be written completely.');
+      }
+      offset += written;
+    }
+    fs.fsyncSync(tempFile);
+    fs.closeSync(tempFile);
+    tempFile = undefined;
+    revalidateAndroidAvdConfig(inspection);
+    fs.renameSync(tempPath, inspection.configPath);
+    renamed = true;
+    fsyncAndroidAvdDirectory(inspection.directory);
+  } finally {
+    if (tempFile !== undefined) {
+      fs.closeSync(tempFile);
+    }
+    if (!renamed) {
+      try {
+        fs.unlinkSync(tempPath);
+      } catch (error) {
+        if (error.code !== 'ENOENT') {
+          throw error;
+        }
+      }
+    }
+  }
+  return true;
+}
+
+function ensureOnRampAndroidAvdHostKeyboard(environment, options = {}) {
+  const inspection = inspectOnRampAndroidAvdHostKeyboard(environment, options);
+  if (!inspection.managed || !inspection.needsChange) {
+    return inspection;
+  }
+  inspection.shutdownProof = options.shutdownProof || null;
+  if (!androidAvdKeyboardLocksPermitUpdate(
+    inspection,
+    inspection.shutdownProof
+  )) {
+    const companion = androidAvdHasOwnedCompanionOnlyLock(
+      inspection.directory
+    );
+    throw new Error(
+      `Android virtual device ${environment.avd} ${companion
+        ? 'has an uncertain leftover emulator lock'
+        : 'may still be active or has uncertain emulator locks'}; `
+      + 'OnRamp did not change its host keyboard configuration. '
+      + 'Close that exact device in Android Device Manager, then run OnRamp '
+      + 'again so it can verify a clean stop.'
+    );
+  }
+  writeOnRampAndroidAvdHostKeyboard(inspection);
+  const verified = inspectOnRampAndroidAvdHostKeyboard(environment, options);
+  if (verified.keyboard !== 'yes') {
+    throw new Error(
+      `Android virtual device ${environment.avd} did not retain its host keyboard setting.`
+    );
+  }
+  return { ...verified, changed: true };
+}
+
 function selectAndroidAvd(avds, sdk, env, metadataFn = androidAvdMetadata) {
   const metadata = avds.map(avd => metadataFn(avd, sdk, env));
   const stable = metadata
@@ -519,6 +989,71 @@ function androidEmulatorAvdName(adb, serial, env, captureFn = capture) {
     .find(line => line && line !== 'OK') || null;
 }
 
+function verifiedRunningAndroidAvdSerial(environment, captureFn = capture) {
+  const result = captureFn(environment.adb, ['devices'], {
+    env: environment.env,
+    check: false,
+  });
+  if (result.status !== 0) {
+    throw new Error('Android could not verify the running emulator inventory.');
+  }
+  const lines = String(result.stdout || '')
+    .split(/\r?\n/)
+    .map(line => line.trim())
+    .filter(Boolean);
+  if (lines.shift() !== 'List of devices attached') {
+    throw new Error('Android returned an unrecognized emulator inventory.');
+  }
+  let selected = null;
+  for (const line of lines) {
+    const fields = line.split(/\s+/);
+    if (fields.length < 2) {
+      throw new Error('Android returned an ambiguous emulator inventory.');
+    }
+    if (!fields[0].startsWith('emulator-')) {
+      continue;
+    }
+    if (fields[1] !== 'device') {
+      throw new Error(
+        `Android emulator ${fields[0]} is ${fields[1] || 'in an unknown state'}; `
+        + 'OnRamp cannot safely update an AVD while inventory is uncertain.'
+      );
+    }
+    const avd = androidEmulatorAvdName(
+      environment.adb,
+      fields[0],
+      environment.env,
+      captureFn
+    );
+    if (!avd || /^KO\b|^error\b/i.test(avd)) {
+      throw new Error(
+        `Android emulator ${fields[0]} could not be identified safely.`
+      );
+    }
+    if (avd === environment.avd) {
+      if (selected) {
+        throw new Error(
+          `Android virtual device ${environment.avd} has more than one `
+          + 'running instance; OnRamp did not change it.'
+        );
+      }
+      selected = fields[0];
+    }
+  }
+  return selected;
+}
+
+function selectedAndroidAvdIsDefinitelyAbsent(
+  environment,
+  captureFn = capture
+) {
+  try {
+    return verifiedRunningAndroidAvdSerial(environment, captureFn) === null;
+  } catch (_error) {
+    return false;
+  }
+}
+
 function runningAndroidAvdSerial(environment, captureFn = capture) {
   for (const serial of connectedAndroidEmulators(
     environment.adb,
@@ -537,6 +1072,129 @@ function runningAndroidAvdSerial(environment, captureFn = capture) {
     }
   }
   return null;
+}
+
+function captureAndroidAvdShutdownProof(
+  environment,
+  inspection,
+  serial,
+  options = {}
+) {
+  const captureFn = options.captureFn || capture;
+  const processStateFn = options.processStateFn || androidCleanupProcessState;
+  if (verifiedRunningAndroidAvdSerial(environment, captureFn) !== serial) {
+    throw new Error(
+      `Android virtual device ${environment.avd} changed before OnRamp `
+      + 'could verify its host process; it was not stopped.'
+    );
+  }
+  let names;
+  try {
+    names = fs.readdirSync(inspection.directory)
+      .filter(name => /\.lock$/.test(name))
+      .sort();
+  } catch (_error) {
+    names = [];
+  }
+  if (
+    !names.includes('hardware-qemu.ini.lock')
+    || names.some(name => ![
+      'hardware-qemu.ini.lock',
+      'multiinstance.lock',
+    ].includes(name))
+  ) {
+    throw new Error(
+      `Android virtual device ${environment.avd} has uncertain live lock `
+      + 'metadata; OnRamp did not stop or modify it.'
+    );
+  }
+  const hardware = androidAvdLockRecord(
+    inspection.directory,
+    'hardware-qemu.ini.lock',
+    { maxSize: 32 }
+  );
+  const pidMatch = hardware
+    && hardware.contents.match(/^([1-9]\d*)(?:\0|\r?\n)?$/);
+  if (
+    !pidMatch
+    || pidMatch[0] !== hardware.contents
+    || !Number.isSafeInteger(Number(pidMatch[1]))
+  ) {
+    throw new Error(
+      `Android virtual device ${environment.avd} has malformed live lock `
+      + 'metadata; OnRamp did not stop or modify it.'
+    );
+  }
+  const ownerPid = Number(pidMatch[1]);
+  const processIdFn = options.processIdFn || androidEmulatorHostProcessId;
+  const hostPid = processIdFn(serial, environment.env, {
+    captureFn,
+    findExecutableFn: options.findExecutableFn,
+    pathExists: options.pathExists,
+    platform: options.platform,
+    procRoot: options.procRoot,
+    readDirectoryFn: options.readDirectoryFn,
+    readFileFn: options.readFileFn,
+    readLinkFn: options.readLinkFn,
+  });
+  if (hostPid !== ownerPid || processStateFn(ownerPid) !== 'alive') {
+    throw new Error(
+      `Android virtual device ${environment.avd} host process could not be `
+      + 'matched to its live lock; OnRamp did not stop or modify it.'
+    );
+  }
+  const companion = names.includes('multiinstance.lock')
+    ? androidAvdLockRecord(
+      inspection.directory,
+      'multiinstance.lock',
+      { empty: true }
+    )
+    : null;
+  if (names.includes('multiinstance.lock') && !companion) {
+    throw new Error(
+      `Android virtual device ${environment.avd} has unsafe companion lock `
+      + 'metadata; OnRamp did not stop or modify it.'
+    );
+  }
+  if (verifiedRunningAndroidAvdSerial(environment, captureFn) !== serial) {
+    throw new Error(
+      `Android virtual device ${environment.avd} changed during host process `
+      + 'verification; OnRamp did not stop or modify it.'
+    );
+  }
+  const verifiedHardware = androidAvdLockRecord(
+    inspection.directory,
+    'hardware-qemu.ini.lock',
+    { maxSize: 32 }
+  );
+  const verifiedCompanion = names.includes('multiinstance.lock')
+    ? androidAvdLockRecord(
+      inspection.directory,
+      'multiinstance.lock',
+      { empty: true }
+    )
+    : null;
+  if (
+    androidAvdLockFingerprint(verifiedHardware)
+      !== androidAvdLockFingerprint(hardware)
+    || androidAvdLockFingerprint(verifiedCompanion)
+      !== androidAvdLockFingerprint(companion)
+  ) {
+    throw new Error(
+      `Android virtual device ${environment.avd} lock ownership changed `
+      + 'during verification; OnRamp did not stop or modify it.'
+    );
+  }
+  return {
+    avd: environment.avd,
+    companionFingerprint: androidAvdLockFingerprint(companion),
+    directoryDev: inspection.directoryStat.dev,
+    directoryIno: inspection.directoryStat.ino,
+    hardwareFingerprint: androidAvdLockFingerprint(hardware),
+    ownerPid,
+    serial,
+    shutdownConfirmed: false,
+  };
 }
 
 function androidEmulatorLaunchArgs(avd) {
@@ -1798,33 +2456,47 @@ async function waitForAndroidEmulator(environment, options = {}) {
   );
 }
 
-async function ensureAndroidEmulator(environment, options = {}) {
+async function waitForAndroidEmulatorShutdown(
+  environment,
+  inspection,
+  shutdownProof,
+  options = {}
+) {
+  const captureFn = options.captureFn || capture;
+  const delay = options.delay || wait;
+  const now = options.now || Date.now;
+  const timeoutMs = options.shutdownTimeoutMs
+    || EMULATOR_SHUTDOWN_TIMEOUT_MS;
+  const pollMs = options.shutdownPollMs || EMULATOR_SHUTDOWN_POLL_MS;
+  const processStateFn = options.processStateFn || androidCleanupProcessState;
+  const shutdownInspection = {
+    ...inspection,
+    captureFn,
+    environment,
+    processStateFn,
+  };
+  const startedAt = now();
+  while (now() - startedAt < timeoutMs) {
+    if (androidAvdKeyboardLocksPermitUpdate(
+      shutdownInspection,
+      shutdownProof,
+      true
+    )) {
+      return { ...shutdownProof, shutdownConfirmed: true };
+    }
+    await delay(pollMs);
+  }
+  throw new Error(
+    `Android virtual device ${environment.avd} did not shut down safely `
+    + `within ${Math.round(timeoutMs / 1000)} seconds; its host keyboard `
+    + 'configuration was not changed.'
+  );
+}
+
+async function coldStartAndroidAvd(environment, options, activate) {
   const captureFn = options.captureFn || capture;
   const spawnFn = options.spawnFn || spawn;
   const log = options.log || console.log;
-  const activateFn = options.activateFn || activateAndroidEmulator;
-  const activate = serial => safelyActivateAndroidEmulator(
-    activateFn,
-    environment,
-    {
-      captureFn,
-      findExecutableFn: options.findExecutableFn,
-      pathExists: options.pathExists,
-      platform: options.platform,
-      procRoot: options.procRoot,
-      readDirectoryFn: options.readDirectoryFn,
-      readFileFn: options.readFileFn,
-      readLinkFn: options.readLinkFn,
-      serial,
-    }
-  );
-  const running = runningAndroidAvdSerial(environment, captureFn);
-  if (running) {
-    log(`Using running Android emulator ${running}`);
-    activate(running);
-    return running;
-  }
-
   const args = androidEmulatorLaunchArgs(environment.avd);
   const child = spawnFn(environment.emulator, args, {
     detached: true,
@@ -1846,11 +2518,138 @@ async function ensureAndroidEmulator(environment, options = {}) {
       startup,
       timeoutMs: options.timeoutMs,
     });
-    activate(serial);
+    if (activate) {
+      activate(serial);
+    }
     return serial;
   } finally {
     startup.release();
   }
+}
+
+async function ensureAndroidEmulator(environment, options = {}) {
+  const captureFn = options.captureFn || capture;
+  const spawnFn = options.spawnFn || spawn;
+  const log = options.log || console.log;
+  const activateFn = options.activateFn || activateAndroidEmulator;
+  const activate = serial => safelyActivateAndroidEmulator(
+    activateFn,
+    environment,
+    {
+      captureFn,
+      findExecutableFn: options.findExecutableFn,
+      pathExists: options.pathExists,
+      platform: options.platform,
+      procRoot: options.procRoot,
+      readDirectoryFn: options.readDirectoryFn,
+      readFileFn: options.readFileFn,
+      readLinkFn: options.readLinkFn,
+      serial,
+    }
+  );
+  const keyboardInspection = inspectOnRampAndroidAvdHostKeyboard(
+    environment,
+    {
+      captureFn,
+      processStateFn: options.processStateFn,
+    }
+  );
+  if (!keyboardInspection.managed) {
+    log(
+      `Android virtual device ${environment.avd} is outside OnRamp's `
+      + 'reserved OnRamp_API_* namespace, so OnRamp left its keyboard '
+      + 'configuration unchanged. Enable hardware keyboard input for that '
+      + 'device in Android Device Manager, then cold-start it.'
+    );
+  }
+  let running = keyboardInspection.managed && keyboardInspection.needsChange
+    ? verifiedRunningAndroidAvdSerial(environment, captureFn)
+    : runningAndroidAvdSerial(environment, captureFn);
+  let shutdownProof = null;
+  if (
+    keyboardInspection.needsChange
+    && !running
+    && androidAvdHasOwnedCompanionOnlyLock(keyboardInspection.directory)
+  ) {
+    log(
+      `Cold-starting Android virtual device ${environment.avd} once to `
+      + 'verify its leftover emulator lock before enabling host keyboard input...'
+    );
+    running = await coldStartAndroidAvd(
+      environment,
+      { ...options, captureFn, log, spawnFn },
+      null
+    );
+  }
+  if (keyboardInspection.needsChange && running) {
+    shutdownProof = captureAndroidAvdShutdownProof(
+      environment,
+      keyboardInspection,
+      running,
+      {
+        captureFn,
+        findExecutableFn: options.findExecutableFn,
+        pathExists: options.pathExists,
+        platform: options.platform,
+        procRoot: options.procRoot,
+        processIdFn: options.processIdFn,
+        processStateFn: options.processStateFn,
+        readDirectoryFn: options.readDirectoryFn,
+        readFileFn: options.readFileFn,
+        readLinkFn: options.readLinkFn,
+      }
+    );
+    log(
+      `Restarting Android virtual device ${environment.avd} to enable `
+      + 'host keyboard input without erasing its apps or data...'
+    );
+    const stopped = captureFn(
+      environment.adb,
+      ['-s', running, 'emu', 'kill'],
+      { env: environment.env, check: false }
+    );
+    if (stopped.status !== 0) {
+      const detail = String(stopped.stderr || stopped.stdout || '').trim();
+      throw new Error(
+        `Android virtual device ${environment.avd} could not be stopped `
+        + 'safely for its host keyboard update.'
+        + (detail ? ` ${detail}` : '')
+      );
+    }
+    shutdownProof = await waitForAndroidEmulatorShutdown(
+      environment,
+      keyboardInspection,
+      shutdownProof,
+      {
+        captureFn,
+        delay: options.delay,
+        now: options.now,
+        processStateFn: options.processStateFn,
+        shutdownPollMs: options.shutdownPollMs,
+        shutdownTimeoutMs: options.shutdownTimeoutMs,
+      }
+    );
+    running = null;
+  }
+  const keyboard = ensureOnRampAndroidAvdHostKeyboard(environment, {
+    captureFn,
+    processStateFn: options.processStateFn,
+    shutdownProof,
+  });
+  if (keyboard.changed) {
+    log('✓ Android emulator host keyboard input is enabled');
+  }
+  if (running) {
+    log(`Using running Android emulator ${running}`);
+    activate(running);
+    return running;
+  }
+
+  return coldStartAndroidAvd(
+    environment,
+    { ...options, captureFn, log, spawnFn },
+    activate
+  );
 }
 
 function androidSdkCandidates(env) {
@@ -2081,6 +2880,13 @@ function createAndroidAvd(
       input: 'no\n',
     }
   );
+  const keyboard = ensureOnRampAndroidAvdHostKeyboard({
+    ...environment,
+    avd: name,
+  }, { captureFn });
+  if (keyboard.changed) {
+    log('✓ Android emulator host keyboard input is enabled');
+  }
   log('✓ Android virtual device ' + name + ' created');
   return name;
 }
@@ -2893,7 +3699,7 @@ async function prepareAndroidEnvironment(options = {}) {
             avdManager,
             preferredImage,
             avds,
-            environment,
+            { ...environment, adb, emulator },
             captureFn,
             log
           );
@@ -3143,6 +3949,7 @@ module.exports = {
   doctorAndroid,
   enableHostClipboardSharing,
   ensureAndroidEmulator,
+  ensureOnRampAndroidAvdHostKeyboard,
   launchPreparedAndroid,
   launchInstalledAndroidApp,
   installAndroidRosetta,

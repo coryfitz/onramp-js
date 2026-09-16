@@ -891,6 +891,9 @@ test('opens the selected simulator window and explicitly activates it', () => {
         stderr: '',
       };
     }
+    if (command === '/usr/bin/defaults' && args.includes('read')) {
+      return {status: 0, stdout: '1\n', stderr: ''};
+    }
     return {status: 0, stdout: '', stderr: ''};
   };
 
@@ -902,6 +905,14 @@ test('opens the selected simulator window and explicitly activates it', () => {
   );
 
   assert.deepEqual(calls[1], [
+    '/usr/bin/defaults',
+    [
+      'read',
+      'com.apple.iphonesimulator',
+      'ConnectHardwareKeyboard',
+    ],
+  ]);
+  assert.deepEqual(calls[2], [
     'open',
     [
       '/Applications/Xcode.app/Contents/Developer/Applications/Simulator.app',
@@ -910,7 +921,7 @@ test('opens the selected simulator window and explicitly activates it', () => {
       'SIMULATOR-ID',
     ],
   ]);
-  assert.deepEqual(calls[2], [
+  assert.deepEqual(calls[3], [
     'osascript',
     [
       '-e',

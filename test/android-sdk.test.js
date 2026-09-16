@@ -761,6 +761,13 @@ test('offers to install a missing Android emulator, image, and AVD', async t => 
           stderr: '',
         };
       }
+      if (command === adb && args[0] === 'devices') {
+        return {
+          status: 0,
+          stdout: 'List of devices attached\n',
+          stderr: '',
+        };
+      }
       if (command === avdManager && args[0] === 'list') {
         return {
           status: 0,
@@ -801,7 +808,12 @@ test('offers to install a missing Android emulator, image, and AVD', async t => 
         emulatorInstalled = true;
       }
       if (selected.includes(imagePackage)) {
-        fs.mkdirSync(path.join(sdk, imageRelative), { recursive: true });
+        const imageDirectory = path.join(sdk, imageRelative);
+        fs.mkdirSync(imageDirectory, { recursive: true });
+        fs.writeFileSync(
+          path.join(imageDirectory, 'system.img'),
+          'fixture image'
+        );
         imageInstalled = true;
       }
     },
@@ -819,6 +831,13 @@ test('offers to install a missing Android emulator, image, and AVD', async t => 
     [imagePackage],
   ]);
   assert.equal(environment.avd, avdName);
+  assert.match(
+    fs.readFileSync(
+      path.join(avdHome, `${avdName}.avd`, 'config.ini'),
+      'utf8'
+    ),
+    /^hw\.keyboard=yes$/m
+  );
 });
 
 test('offers a sharp replacement for a generic low-resolution AVD', async t => {
@@ -874,7 +893,9 @@ test('offers a sharp replacement for a generic low-resolution AVD', async t => {
     fs.mkdirSync(path.dirname(filePath), { recursive: true });
     fs.writeFileSync(filePath, '');
   }
-  fs.mkdirSync(path.join(sdk, imageRelative), { recursive: true });
+  const imageDirectory = path.join(sdk, imageRelative);
+  fs.mkdirSync(imageDirectory, { recursive: true });
+  fs.writeFileSync(path.join(imageDirectory, 'system.img'), 'fixture image');
   fs.mkdirSync(oldDirectory, { recursive: true });
   fs.writeFileSync(
     path.join(avdHome, oldAvd + '.ini'),
@@ -921,6 +942,13 @@ test('offers a sharp replacement for a generic low-resolution AVD', async t => {
           stdout: replacementCreated
             ? oldAvd + '\n' + newAvd + '\n'
             : oldAvd + '\n',
+          stderr: '',
+        };
+      }
+      if (command === adb && args[0] === 'devices') {
+        return {
+          status: 0,
+          stdout: 'List of devices attached\n',
           stderr: '',
         };
       }

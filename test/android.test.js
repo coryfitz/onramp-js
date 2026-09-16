@@ -1013,7 +1013,7 @@ test('fails clearly when a cached Android launcher activity cannot be resolved',
 test('reports an Android Emulator fatal error without waiting for boot timeout', async () => {
   const environment = {
     adb: '/sdk/platform-tools/adb',
-    avd: 'OnRamp_API_37_1',
+    avd: 'Pixel_API_37_1',
     emulator: '/sdk/emulator/emulator',
     env: { ANDROID_HOME: '/sdk' },
   };
