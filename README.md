@@ -199,9 +199,17 @@ During a full native build, OnRamp prints elapsed activity messages when Xcode
 or Gradle is otherwise quiet, including Xcode's post-build settings and install
 work.
 
-The native run commands add a missing platform automatically. The iOS command
-checks Xcode and CocoaPods, installs Pods, and asks Apple for the preferred
-runtime build on every launch. When that runtime is missing or newer than the
+The native run commands add a missing platform automatically. Before native
+generation, the iOS command checks Xcode licensing and first-launch readiness.
+When needed, it offers Apple's interactive privileged license review, then
+separately offers the privileged first-launch component setup, and rechecks both
+before continuing. With the normal global `xcode-select` configuration, those
+actions use only Apple's fixed system commands. An explicit `DEVELOPER_DIR`
+remains available for read-only checks, but OnRamp does not carry that
+user-selected path through `sudo`; it reports the exact manual command instead.
+`doctor` remains read-only and `--force` never accepts the license. The command then checks
+CocoaPods, installs Pods, and asks Apple for the preferred runtime build on
+every launch. When that runtime is missing or newer than the
 installed build, OnRamp offers to download and install it through Xcode before
 selecting a simulator on the newest runtime. Runtime downloads request Apple's
 exact build and explicitly select the host architecture; if that build is not
@@ -220,6 +228,9 @@ including creating a new AVD required by an image upgrade. Downloads can be
 several GB. It does not skip update checks, force an app rebuild (`--rebuild`),
 or bypass compatibility checks or rejected-download cooldowns. First installs,
 architecture repairs, and display-only replacements still ask for confirmation.
+Xcode-license acceptance, Xcode first-launch setup, and Rosetta installation
+always require separate explicit confirmation; `--force` never accepts software
+licenses.
 
 **`run mobile --force` also authorizes permanent cleanup of verified obsolete
 emulator files and saved device data, without another prompt.** After verifying
@@ -261,6 +272,13 @@ stable Google APIs system image and create a reusable AVD. If `sdkmanager` is
 missing or too old to run, OnRamp first offers to download verified current
 command-line tools from Google's repository. Downloads and SDK package changes
 require confirmation unless an update was preapproved with `--force` as above.
+On Apple silicon, OnRamp also validates Google's actual Android CLI executable.
+If the installed CLI is Intel-only and Rosetta is unavailable, it explicitly
+offers Apple's Rosetta installer, discloses the license acceptance and possible
+administrator-password prompt, and rechecks both Rosetta and the exact CLI.
+Declining preserves a complete existing SDK while skipping package-update
+checks; missing components fail with the manual remediation. `--force` never
+authorizes Rosetta installation or license acceptance.
 After validating replacement command-line tools, OnRamp
 automatically removes strictly older copies in its own `onramp-*` tool
 directories; unrelated tools and same-version copies remain. When Google's

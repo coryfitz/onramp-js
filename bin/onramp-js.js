@@ -38,6 +38,7 @@ Options:
   --rebuild  Force a fresh native app build instead of reusing an unchanged installation
   --force   Accept emulator updates; mobile also deletes verified obsolete emulator files/data
             ios/android still ask before cleanup; first installs and repairs remain opt-in
+            Xcode and Rosetta setup always require separate license consent
   --fresh   Recreate Podfile.lock during an iOS repair
   --check   Read-only upgrade or storage check
   --clean   Remove eligible abandoned build output and owned temporary files

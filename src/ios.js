@@ -17,6 +17,10 @@ const { syncIosNodeEnvironment } = require('./ios-node-env');
 const IOS_DESTINATION_QUERY_ATTEMPTS = 3;
 const IOS_DESTINATION_RETRY_DELAY_MS = 500;
 const IOS_RUNTIME_DOWNLOAD_RETRY_MS = 24 * 60 * 60 * 1000;
+const SYSTEM_ENV = '/usr/bin/env';
+const SYSTEM_SUDO = '/usr/bin/sudo';
+const SYSTEM_XCODEBUILD = '/usr/bin/xcodebuild';
+const SYSTEM_XCRUN = '/usr/bin/xcrun';
 
 function requireDarwin() {
   if (process.platform !== 'darwin') {
@@ -24,8 +28,8 @@ function requireDarwin() {
   }
 }
 
-function xcodeVersion(xcodebuild) {
-  const result = capture(xcodebuild, ['-version']);
+function xcodeVersion(xcodebuild, env = process.env) {
+  const result = capture(xcodebuild, ['-version'], { env });
   const firstLine = result.stdout.split(/\r?\n/)[0] || '';
   const match = firstLine.match(/^Xcode\s+([0-9]+(?:\.[0-9]+)?)/);
   return {
@@ -34,11 +38,57 @@ function xcodeVersion(xcodebuild) {
   };
 }
 
-function doctorIos() {
+function resolveSelectedDeveloperDir(xcrun, env, captureCommand = capture) {
+  try {
+    const result = captureCommand(xcrun, ['--find', 'xcodebuild'], {
+      env,
+      check: false,
+    });
+    const candidate = result.stdout.trim().split(/\r?\n/)[0];
+    const suffix = path.join('usr', 'bin', 'xcodebuild');
+    if (
+      result.status === 0
+      && path.isAbsolute(candidate)
+      && candidate.endsWith(suffix)
+    ) {
+      const developerDir = candidate
+        .slice(0, -suffix.length)
+        .replace(/[\\/]$/, '');
+      if (developerDir) {
+        const selected = fs.realpathSync(developerDir);
+        if (env.DEVELOPER_DIR) {
+          const requested = fs.realpathSync(env.DEVELOPER_DIR);
+          if (requested !== selected) {
+            throw new Error(
+              `xcrun selected ${developerDir}, not DEVELOPER_DIR=${env.DEVELOPER_DIR}.`
+            );
+          }
+        }
+        return selected;
+      }
+    }
+  } catch (error) {
+    if (env.DEVELOPER_DIR) {
+      throw new Error(
+        `Could not validate DEVELOPER_DIR=${env.DEVELOPER_DIR}: ${error.message}`
+      );
+    }
+  }
+  if (env.DEVELOPER_DIR) {
+    throw new Error(
+      `Could not resolve xcodebuild for DEVELOPER_DIR=${env.DEVELOPER_DIR}.`
+    );
+  }
+  return null;
+}
+
+function inspectIosEnvironment() {
   requireDarwin();
   const env = { ...process.env };
-  const xcodebuild = findExecutable('xcodebuild', env);
-  const xcrun = findExecutable('xcrun', env);
+  const xcodebuild = fs.existsSync(SYSTEM_XCODEBUILD)
+    ? SYSTEM_XCODEBUILD
+    : null;
+  const xcrun = fs.existsSync(SYSTEM_XCRUN) ? SYSTEM_XCRUN : null;
   const pod = findExecutable('pod', env);
 
   if (!xcodebuild || !xcrun) {
@@ -48,17 +98,264 @@ function doctorIos() {
     throw new Error('CocoaPods not found. Install it with `brew install cocoapods`, then try again.');
   }
 
-  const version = xcodeVersion(xcodebuild);
+  const developerDir = resolveSelectedDeveloperDir(
+    xcrun,
+    env
+  );
+  const developerDirOverride = Boolean(env.DEVELOPER_DIR);
+  const version = xcodeVersion(xcodebuild, env);
   console.log(`Found ${version.display}`);
-  capture(xcodebuild, ['-showsdks'], { env });
-  console.log(`Using CocoaPods ${capture(pod, ['--version'], { env }).stdout.trim()}`);
-  console.log('✓ iOS environment is ready');
-  return { env, pod, version, xcodebuild, xcrun };
+  return {
+    developerDir,
+    developerDirOverride,
+    env,
+    pod,
+    version,
+    xcodebuild,
+    xcrun,
+  };
+}
+
+function shellQuote(value) {
+  if (/^[A-Za-z0-9_./:=+-]+$/.test(value)) {
+    return value;
+  }
+  return `'${value.replaceAll("'", `'"'"'`)}'`;
+}
+
+function xcodeSetupInvocation(environment, action) {
+  const args = [];
+  if (xcodeDeveloperDirIsExplicit(environment)) {
+    args.push(
+      SYSTEM_ENV,
+      `DEVELOPER_DIR=${environment.developerDir}`
+    );
+  }
+  args.push(SYSTEM_XCODEBUILD, action);
+  return {
+    args,
+    command: SYSTEM_SUDO,
+    display: ['sudo', ...args].map(shellQuote).join(' '),
+  };
+}
+
+function xcodeDeveloperDirIsExplicit(environment) {
+  return Boolean(
+    environment.developerDirOverride
+    || (environment.env && environment.env.DEVELOPER_DIR)
+  );
+}
+
+function explicitDeveloperDirSetupError(environment, invocation) {
+  return new Error(
+    `DEVELOPER_DIR is explicitly set to ${environment.developerDir}. OnRamp `
+    + 'will not pass a user-selected developer directory through sudo. Run '
+    + `\`${invocation.display}\` in an interactive Terminal, then run OnRamp again.`
+  );
+}
+
+function xcodeResultOutput(result) {
+  return `${result.stdout || ''}\n${result.stderr || ''}`.trim();
+}
+
+function xcodeLicenseIsRequired(result) {
+  return /(?:have not agreed|accept|agree).{0,80}Xcode.{0,80}license|Xcode.{0,80}license agreement/isu
+    .test(xcodeResultOutput(result));
+}
+
+function xcodeCapture(environment, args, captureCommand = capture) {
+  return captureCommand(environment.xcodebuild, args, {
+    env: environment.env,
+    check: false,
+  });
+}
+
+function failedXcodeCommand(environment, args, result) {
+  const detail = xcodeResultOutput(result);
+  return new Error(
+    `${environment.xcodebuild} ${args.join(' ')} exited with status ${result.status}`
+    + `${detail ? `: ${detail}` : ''}`
+  );
+}
+
+async function runXcodeSetupAction(environment, action, options = {}) {
+  const ask = options.promptYesNo || promptYesNo;
+  const runCommand = options.runCommand || runAsync;
+  const invocation = xcodeSetupInvocation(environment, action);
+  const license = action === '-license';
+  if (xcodeDeveloperDirIsExplicit(environment)) {
+    throw explicitDeveloperDirSetupError(environment, invocation);
+  }
+  const question = license
+    ? 'Xcode\'s license agreements must be reviewed and accepted before iOS development. '
+      + `Open Apple\'s interactive license review now with \`${invocation.display}\`? (y/N): `
+    : 'Xcode must finish installing its first-launch components before iOS development. '
+      + `Run \`${invocation.display}\` now? (y/N): `;
+  const promptOptions = {};
+  if (options.input) {
+    promptOptions.input = options.input;
+  }
+  if (options.output) {
+    promptOptions.output = options.output;
+  }
+  const approved = await ask(question, promptOptions);
+  if (!approved) {
+    const description = license
+      ? 'Xcode license review is required'
+      : 'Xcode first-launch setup is required';
+    throw new Error(
+      `${description} before iOS development can continue. Run `
+      + `\`${invocation.display}\` in an interactive Terminal, then run OnRamp again.`
+    );
+  }
+
+  try {
+    // Recheck immediately before elevation, then remove the override from the
+    // child environment as a second boundary against path substitution while
+    // the interactive prompt was open.
+    if (xcodeDeveloperDirIsExplicit(environment)) {
+      throw explicitDeveloperDirSetupError(environment, invocation);
+    }
+    const privilegedEnv = { ...environment.env };
+    delete privilegedEnv.DEVELOPER_DIR;
+    const commandOptions = { inheritInput: true };
+    if (!license) {
+      commandOptions.activityLabel = 'Xcode is still completing first-launch setup';
+    }
+    await runCommand(
+      invocation.command,
+      invocation.args,
+      options.cwd,
+      privilegedEnv,
+      commandOptions
+    );
+  } catch (error) {
+    throw new Error(
+      `Xcode ${license ? 'license review' : 'first-launch setup'} did not complete: `
+      + `${error.message}. Run \`${invocation.display}\` in an interactive Terminal, `
+      + 'then run OnRamp again.'
+    );
+  }
+}
+
+async function ensureXcodeSetup(environment, options = {}) {
+  const captureCommand = options.captureCommand || capture;
+  const log = options.log || console.log;
+  let firstLaunchResult = xcodeCapture(
+    environment,
+    ['-checkFirstLaunchStatus'],
+    captureCommand
+  );
+  let sdkResult = xcodeCapture(environment, ['-showsdks'], captureCommand);
+  if (sdkResult.status !== 0 && xcodeLicenseIsRequired(sdkResult)) {
+    await runXcodeSetupAction(environment, '-license', options);
+    sdkResult = xcodeCapture(environment, ['-showsdks'], captureCommand);
+    if (sdkResult.status !== 0 && xcodeLicenseIsRequired(sdkResult)) {
+      const invocation = xcodeSetupInvocation(environment, '-license');
+      const detail = xcodeResultOutput(sdkResult);
+      throw new Error(
+        'Xcode still reports that its license agreements have not been accepted'
+        + `${detail ? `: ${detail}` : '.'} `
+        + `Run \`${invocation.display}\` in an interactive Terminal, then run OnRamp again.`
+      );
+    }
+    if (sdkResult.status !== 0) {
+      throw failedXcodeCommand(environment, ['-showsdks'], sdkResult);
+    }
+    log('✓ Xcode license agreements are accepted');
+    firstLaunchResult = xcodeCapture(
+      environment,
+      ['-checkFirstLaunchStatus'],
+      captureCommand
+    );
+  }
+
+  // A failed SDK probe that is not the recognized license diagnostic must
+  // stop here. `-runFirstLaunch` also accepts Apple's license, so never use it
+  // as a generic repair while license state is ambiguous.
+  if (sdkResult.status !== 0) {
+    throw failedXcodeCommand(environment, ['-showsdks'], sdkResult);
+  }
+
+  if (firstLaunchResult.status !== 0) {
+    await runXcodeSetupAction(environment, '-runFirstLaunch', options);
+    firstLaunchResult = xcodeCapture(
+      environment,
+      ['-checkFirstLaunchStatus'],
+      captureCommand
+    );
+    if (firstLaunchResult.status !== 0) {
+      const invocation = xcodeSetupInvocation(environment, '-runFirstLaunch');
+      const detail = xcodeResultOutput(firstLaunchResult);
+      throw new Error(
+        'Xcode first-launch setup is still incomplete'
+        + `${detail ? `: ${detail}` : '.'} Run \`${invocation.display}\` in an `
+        + 'interactive Terminal, then run OnRamp again.'
+      );
+    }
+    log('✓ Xcode first-launch components are installed');
+    sdkResult = xcodeCapture(environment, ['-showsdks'], captureCommand);
+  }
+
+  if (sdkResult.status !== 0) {
+    if (xcodeLicenseIsRequired(sdkResult)) {
+      const invocation = xcodeSetupInvocation(environment, '-license');
+      throw new Error(
+        'Xcode license review is required before iOS development can continue. '
+        + `Run \`${invocation.display}\` in an interactive Terminal, then run OnRamp again.`
+      );
+    }
+    throw failedXcodeCommand(environment, ['-showsdks'], sdkResult);
+  }
+}
+
+function finishIosDoctor(
+  environment,
+  captureCommand = capture,
+  log = console.log
+) {
+  const podVersion = captureCommand(environment.pod, ['--version'], {
+    env: environment.env,
+  }).stdout.trim();
+  log(`Using CocoaPods ${podVersion}`);
+  log('✓ iOS environment is ready');
+}
+
+function doctorIos(options = {}) {
+  const captureCommand = options.captureCommand || capture;
+  const environment = (options.inspectEnvironment || inspectIosEnvironment)();
+  const firstLaunchResult = xcodeCapture(
+    environment,
+    ['-checkFirstLaunchStatus'],
+    captureCommand
+  );
+  const sdkResult = xcodeCapture(environment, ['-showsdks'], captureCommand);
+  if (sdkResult.status !== 0 && xcodeLicenseIsRequired(sdkResult)) {
+    const invocation = xcodeSetupInvocation(environment, '-license');
+    throw new Error(
+      'Xcode license review is required before iOS development can continue. '
+      + `Run \`${invocation.display}\` in an interactive Terminal.`
+    );
+  }
+  if (sdkResult.status !== 0) {
+    throw failedXcodeCommand(environment, ['-showsdks'], sdkResult);
+  }
+  if (firstLaunchResult.status !== 0) {
+    const invocation = xcodeSetupInvocation(environment, '-runFirstLaunch');
+    throw new Error(
+      'Xcode first-launch setup is required before iOS development can continue. '
+      + `Run \`${invocation.display}\` in an interactive Terminal.`
+    );
+  }
+  finishIosDoctor(environment, captureCommand, options.log || console.log);
+  return environment;
 }
 
 async function prepareIosEnvironment(options = {}) {
+  let environment;
+  const customDoctor = options.doctor;
   try {
-    return (options.doctor || doctorIos)();
+    environment = (customDoctor || inspectIosEnvironment)();
   } catch (error) {
     if (!/Xcode command-line tools were not found/.test(error.message)) {
       throw error;
@@ -90,11 +387,30 @@ async function prepareIosEnvironment(options = {}) {
       + 'run OnRamp again; OnRamp will install the newest iOS runtime.'
     );
   }
+
+  // Preserve the existing injectable doctor contract used by callers and
+  // tests: a successful replacement doctor has already completed its checks.
+  if (customDoctor) {
+    return environment;
+  }
+  await ensureXcodeSetup(environment, options);
+  finishIosDoctor(
+    environment,
+    options.captureCommand || capture,
+    options.log || console.log
+  );
+  return environment;
 }
 
-function ensureXcodeComponents(environment, iosDir) {
+/*
+ * Xcode's legal agreement and privileged first-launch work must happen before
+ * native generation. Component checks below remain as a fallback for partial
+ * or damaged Xcode installations discovered only after a project exists.
+ */
+async function ensureXcodeComponents(environment, iosDir, options = {}) {
   console.log('Checking if Xcode components are properly installed...');
-  const result = capture(environment.xcodebuild, ['-list'], {
+  const captureCommand = options.captureCommand || capture;
+  const result = captureCommand(environment.xcodebuild, ['-list'], {
     cwd: iosDir,
     env: environment.env,
     check: false,
@@ -111,13 +427,18 @@ function ensureXcodeComponents(environment, iosDir) {
   }
 
   console.log('Detected missing Xcode framework components.');
-  console.log('Running Xcode first-launch setup...');
-  run(
-    'sudo',
-    [environment.xcodebuild, '-runFirstLaunch'],
-    iosDir,
-    environment.env
-  );
+  await runXcodeSetupAction(environment, '-runFirstLaunch', {
+    ...options,
+    cwd: iosDir,
+  });
+  const verified = captureCommand(environment.xcodebuild, ['-list'], {
+    cwd: iosDir,
+    env: environment.env,
+    check: false,
+  });
+  if (verified.status !== 0) {
+    throw failedXcodeCommand(environment, ['-list'], verified);
+  }
   console.log('✓ Xcode components installed');
 }
 
@@ -1289,7 +1610,7 @@ async function prepareIosDevelopment({
     environment: appEnvironment,
   });
   const iosDir = path.join(outputDir, 'ios');
-  ensureXcodeComponents(environment, iosDir);
+  await ensureXcodeComponents(environment, iosDir);
   console.log('Checking for the latest compatible iOS Simulator runtime...');
   await ensurePreferredIosSimulatorRuntime(environment, {
     cwd: iosDir,
@@ -1489,6 +1810,8 @@ module.exports = {
   ensureIosSimulatorBooted,
   ensurePreferredIosSimulatorRuntime,
   ensureIosPods,
+  ensureXcodeComponents,
+  ensureXcodeSetup,
   iosBundleIdentifier,
   iosAppIsInstalled,
   iosJsLocation,
@@ -1508,6 +1831,7 @@ module.exports = {
   prepareIosEnvironment,
   queryEligibleIosSimulatorsWithRetry,
   repairIos,
+  resolveSelectedDeveloperDir,
   runIos,
   selectIosSimulator,
   showIosSimulator,

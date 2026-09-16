@@ -5,9 +5,11 @@ const { spawn } = require('child_process');
 const {
   androidCommandCandidates,
   androidPackageNeedsUpdate,
+  androidRosettaAvailable,
   androidSystemImageDetails,
   bootstrapAndroidCommandLineTools,
   compareVersions,
+  findAndroidSdkManagerRosettaIssue,
   findAvdManager,
   findUsableSdkManager,
   installAndroidSdkPackages,
@@ -2344,17 +2346,136 @@ function existingAndroidEnvironmentOrNull(environment, options = {}) {
   }
 }
 
+async function installAndroidRosetta(env, runFn = runAsync) {
+  return runFn(
+    '/usr/bin/sudo',
+    [
+      '/usr/sbin/softwareupdate',
+      '--install-rosetta',
+      '--agree-to-license',
+    ],
+    undefined,
+    env,
+    {
+      activityLabel: 'Rosetta 2 is still installing',
+      inheritInput: true,
+    }
+  );
+}
+
 async function prepareAndroidEnvironment(options = {}) {
   const ask = options.promptYesNo || promptYesNo;
   const captureFn = options.captureFn || capture;
   const runFn = options.runFn;
   const log = options.log || console.log;
   const environment = baseAndroidEnvironment(options);
+  const sdkManagerOptions = {
+    architecture: options.architecture,
+    pathExists: options.pathExists,
+    platform: options.platform,
+    rosettaAvailableFn: options.rosettaAvailableFn,
+  };
   let sdkManager = findUsableSdkManager(
     environment.sdk,
     environment.env,
-    captureFn
+    captureFn,
+    sdkManagerOptions
   );
+
+  const continueWithoutPackageManager = message => {
+    const existing = existingAndroidEnvironmentOrNull(environment, {
+      captureFn,
+      log,
+    });
+    if (existing) {
+      log('Warning: ' + message);
+      log(
+        'Continuing with the complete installed Android SDK and virtual '
+        + 'device; package update checks are unavailable.'
+      );
+      return existing;
+    }
+    throw new Error(
+      message + ' Android package management is required to install the '
+      + 'missing emulator components. Run OnRamp again and approve the '
+      + 'Rosetta 2 installation, or install it manually with `sudo '
+      + '/usr/sbin/softwareupdate --install-rosetta --agree-to-license`.'
+    );
+  };
+
+  const offerRosettaRepair = async () => {
+    const issue = findAndroidSdkManagerRosettaIssue(
+      environment.sdk,
+      environment.env,
+      captureFn,
+      sdkManagerOptions
+    );
+    if (!issue) {
+      return null;
+    }
+    const approved = await ask(
+      'Google\'s current Android command-line tools are Intel-only and '
+      + 'require Rosetta 2 on this Apple silicon Mac. OnRamp will run '
+      + '`sudo /usr/sbin/softwareupdate --install-rosetta '
+      + '--agree-to-license`; this accepts Apple\'s Rosetta software license, '
+      + 'and your administrator password may be requested. Install Rosetta '
+      + '2 now? (y/N): '
+    );
+    if (!approved) {
+      return {
+        blocked: 'Rosetta 2 installation was declined, so OnRamp cannot '
+          + 'run Google\'s Android package manager.',
+      };
+    }
+
+    log('Installing Rosetta 2 with Apple softwareupdate...');
+    try {
+      await (options.installRosetta || installAndroidRosetta)(
+        environment.env,
+        options.runRosettaFn || runAsync
+      );
+    } catch (error) {
+      return {
+        blocked: 'Rosetta 2 installation failed: ' + error.message + '.',
+      };
+    }
+
+    const rosettaAvailable = options.rosettaAvailableFn
+      || androidRosettaAvailable;
+    if (!rosettaAvailable(
+      environment.env,
+      captureFn,
+      sdkManagerOptions
+    )) {
+      return {
+        blocked: 'Rosetta 2 installation finished, but an Intel execution '
+          + 'probe still fails.',
+      };
+    }
+    const repairedManager = findUsableSdkManager(
+      environment.sdk,
+      environment.env,
+      captureFn,
+      sdkManagerOptions
+    );
+    if (!repairedManager) {
+      return {
+        blocked: 'Rosetta 2 is available, but Google\'s Android command-line '
+          + 'tools still cannot be started.',
+      };
+    }
+    log('✓ Rosetta 2 is installed and Android command-line tools are ready');
+    return { sdkManager: repairedManager };
+  };
+
+  if (!sdkManager) {
+    const repaired = await offerRosettaRepair();
+    if (repaired && repaired.sdkManager) {
+      sdkManager = repaired.sdkManager;
+    } else if (repaired && repaired.blocked) {
+      return continueWithoutPackageManager(repaired.blocked);
+    }
+  }
 
   if (!sdkManager) {
     try {
@@ -2368,20 +2489,29 @@ async function prepareAndroidEnvironment(options = {}) {
         downloadFn: options.downloadFn,
         extractFn: options.extractFn,
         log,
+        ...sdkManagerOptions,
       });
     } catch (error) {
-      const existing = existingAndroidEnvironmentOrNull(environment, {
-        captureFn,
-        log,
-      });
-      if (existing) {
-        log(
-          'Warning: OnRamp could not check Android package updates: '
-          + error.message
-        );
-        return existing;
+      const repaired = await offerRosettaRepair();
+      if (repaired && repaired.sdkManager) {
+        sdkManager = repaired.sdkManager;
+      } else if (repaired && repaired.blocked) {
+        return continueWithoutPackageManager(repaired.blocked);
       }
-      throw error;
+      if (!sdkManager) {
+        const existing = existingAndroidEnvironmentOrNull(environment, {
+          captureFn,
+          log,
+        });
+        if (existing) {
+          log(
+            'Warning: OnRamp could not check Android package updates: '
+            + error.message
+          );
+          return existing;
+        }
+        throw error;
+      }
     }
     if (!sdkManager) {
       const existing = existingAndroidEnvironmentOrNull(environment, {
@@ -3015,6 +3145,7 @@ module.exports = {
   ensureAndroidEmulator,
   launchPreparedAndroid,
   launchInstalledAndroidApp,
+  installAndroidRosetta,
   parseMachOArchitectures,
   parseEmulatorVersion,
   parseAndroidDeviceProfiles,

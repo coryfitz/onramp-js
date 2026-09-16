@@ -77,6 +77,171 @@ function siblingAndroidCli(sdkManager, platform = process.platform) {
   return fs.existsSync(candidate) ? candidate : null;
 }
 
+function androidCommandFailureText(validation) {
+  return [
+    validation && validation.error && validation.error.message,
+    validation && validation.result && validation.result.stderr,
+    validation && validation.result && validation.result.stdout,
+  ].filter(Boolean).join('\n');
+}
+
+function captureAndroidCommand(command, args, env, captureFn) {
+  try {
+    return {
+      error: null,
+      result: captureFn(command, args, { env, check: false }),
+    };
+  } catch (error) {
+    return { error, result: null };
+  }
+}
+
+function androidCliArchitectures(
+  androidCli,
+  env,
+  captureFn = capture,
+  options = {}
+) {
+  const platform = options.platform || process.platform;
+  if (platform !== 'darwin') {
+    return [];
+  }
+  const fileCommand = options.fileCommand || '/usr/bin/file';
+  const pathExists = options.pathExists || fs.existsSync;
+  if (!pathExists(fileCommand)) {
+    return [];
+  }
+  const validation = captureAndroidCommand(
+    fileCommand,
+    [androidCli],
+    env,
+    captureFn
+  );
+  if (!validation.result || validation.result.status !== 0) {
+    return [];
+  }
+  return [...new Set(
+    `${validation.result.stdout}\n${validation.result.stderr}`
+      .match(/\b(?:arm64|x86_64|i386)\b/g) || []
+  )];
+}
+
+function androidRosettaAvailable(
+  env,
+  captureFn = capture,
+  options = {}
+) {
+  const platform = options.platform || process.platform;
+  const architecture = options.architecture || os.arch();
+  if (platform !== 'darwin' || architecture !== 'arm64') {
+    return true;
+  }
+  const archCommand = options.archCommand || '/usr/bin/arch';
+  const trueCommand = options.trueCommand || '/usr/bin/true';
+  const pathExists = options.pathExists || fs.existsSync;
+  if (!pathExists(archCommand) || !pathExists(trueCommand)) {
+    return false;
+  }
+  const validation = captureAndroidCommand(
+    archCommand,
+    ['-x86_64', trueCommand],
+    env,
+    captureFn
+  );
+  return Boolean(
+    validation.result && validation.result.status === 0
+  );
+}
+
+function androidCommandNeedsRosetta(
+  androidCli,
+  validation,
+  env,
+  captureFn = capture,
+  options = {}
+) {
+  const platform = options.platform || process.platform;
+  const architecture = options.architecture || os.arch();
+  if (platform !== 'darwin' || architecture !== 'arm64') {
+    return false;
+  }
+  const architectures = androidCliArchitectures(
+    androidCli,
+    env,
+    captureFn,
+    options
+  );
+  const intelOnly = (
+    architectures.includes('x86_64')
+    && !architectures.includes('arm64')
+  );
+  const badCpu = /bad cpu type|\bebadarch\b|\benoexec\b|(?:system error|errno)\s*-?86\b/i
+    .test(androidCommandFailureText(validation));
+  if (!intelOnly || !badCpu) {
+    return false;
+  }
+  const available = options.rosettaAvailableFn || androidRosettaAvailable;
+  return !available(env, captureFn, options);
+}
+
+function inspectAndroidSdkManager(
+  sdkManager,
+  sdk,
+  env,
+  captureFn = capture,
+  options = {}
+) {
+  const androidCli = siblingAndroidCli(
+    sdkManager,
+    options.platform || process.platform
+  );
+  if (androidCli) {
+    const cliValidation = captureAndroidCommand(
+      androidCli,
+      ['--version'],
+      env,
+      captureFn
+    );
+    if (
+      cliValidation.error
+      || !cliValidation.result
+      || cliValidation.result.status !== 0
+    ) {
+      return {
+        androidCli,
+        failure: androidCommandFailureText(cliValidation),
+        requiresRosetta: androidCommandNeedsRosetta(
+          androidCli,
+          cliValidation,
+          env,
+          captureFn,
+          options
+        ),
+        sdkManager,
+        usable: false,
+      };
+    }
+  }
+
+  const managerValidation = captureAndroidCommand(
+    sdkManager,
+    ['--version'],
+    env,
+    captureFn
+  );
+  const usable = Boolean(
+    managerValidation.result && managerValidation.result.status === 0
+  );
+  return {
+    androidCli,
+    failure: usable ? '' : androidCommandFailureText(managerValidation),
+    requiresRosetta: false,
+    sdk,
+    sdkManager,
+    usable,
+  };
+}
+
 function androidSdkInstallInvocation(
   sdkManager,
   sdk,
@@ -303,18 +468,43 @@ function androidCommandCandidates(sdk, command) {
   ].filter(candidate => fs.existsSync(candidate));
 }
 
-function findUsableSdkManager(sdk, env, captureFn = capture) {
+function findUsableSdkManager(
+  sdk,
+  env,
+  captureFn = capture,
+  options = {}
+) {
   for (const candidate of androidCommandCandidates(sdk, 'sdkmanager')) {
-    try {
-      const result = captureFn(candidate, ['--version'], {
-        env,
-        check: false,
-      });
-      if (result.status === 0) {
-        return candidate;
-      }
-    } catch (_error) {
-      // Try another installed command-line tools version.
+    const inspection = inspectAndroidSdkManager(
+      candidate,
+      sdk,
+      env,
+      captureFn,
+      options
+    );
+    if (inspection.usable) {
+      return candidate;
+    }
+  }
+  return null;
+}
+
+function findAndroidSdkManagerRosettaIssue(
+  sdk,
+  env,
+  captureFn = capture,
+  options = {}
+) {
+  for (const candidate of androidCommandCandidates(sdk, 'sdkmanager')) {
+    const inspection = inspectAndroidSdkManager(
+      candidate,
+      sdk,
+      env,
+      captureFn,
+      options
+    );
+    if (inspection.requiresRosetta) {
+      return inspection;
     }
   }
   return null;
@@ -411,6 +601,10 @@ async function bootstrapAndroidCommandLineTools({
   downloadFn = downloadFile,
   extractFn = extractZip,
   log = console.log,
+  platform,
+  architecture,
+  pathExists,
+  rosettaAvailableFn,
 }) {
   const repositoryXml = await fetchText(
     ANDROID_REPOSITORY_URL,
@@ -462,14 +656,23 @@ async function bootstrapAndroidCommandLineTools({
         process.platform === 'win32' ? 'sdkmanager.bat' : 'sdkmanager'
       );
       if (fs.existsSync(existing)) {
-        const result = captureFn(existing, ['--version'], {
+        const inspection = inspectAndroidSdkManager(
+          existing,
+          sdk,
           env,
-          check: false,
-        });
-        if (result.status === 0) {
+          captureFn,
+          { architecture, pathExists, platform, rosettaAvailableFn }
+        );
+        if (inspection.usable) {
           prependPath(env, path.dirname(existing));
           pruneOldAndroidCommandLineTools(sdk, existing, { log });
           return existing;
+        }
+        if (inspection.requiresRosetta) {
+          throw new Error(
+            'Google Android command-line tools require Rosetta 2 on this '
+            + 'Apple silicon Mac.'
+          );
         }
       }
       destination = path.join(toolsRoot, baseName + '-' + suffix);
@@ -482,11 +685,20 @@ async function bootstrapAndroidCommandLineTools({
       process.platform === 'win32' ? 'sdkmanager.bat' : 'sdkmanager'
     );
     prependPath(env, path.dirname(sdkManager));
-    const validation = captureFn(sdkManager, ['--version'], {
+    const inspection = inspectAndroidSdkManager(
+      sdkManager,
+      sdk,
       env,
-      check: false,
-    });
-    if (validation.status !== 0) {
+      captureFn,
+      { architecture, pathExists, platform, rosettaAvailableFn }
+    );
+    if (!inspection.usable) {
+      if (inspection.requiresRosetta) {
+        throw new Error(
+          'Downloaded Google Android command-line tools require Rosetta 2 '
+          + 'on this Apple silicon Mac.'
+        );
+      }
       throw new Error(
         'Downloaded Android command-line tools could not be started.'
       );
@@ -1086,6 +1298,7 @@ function preferredAndroidSystemImage(
 
 module.exports = {
   ANDROID_REPOSITORY_URL,
+  androidCliArchitectures,
   androidCliPlatform,
   androidCommandCandidates,
   androidPackageNeedsUpdate,
@@ -1098,9 +1311,11 @@ module.exports = {
   bootstrapAndroidCommandLineTools,
   compareVersions,
   downloadFile,
+  findAndroidSdkManagerRosettaIssue,
   findAvdManager,
   findUsableSdkManager,
   installAndroidSdkPackages,
+  inspectAndroidSdkManager,
   listAndroidSdkPackages,
   parseAndroidCommandLineToolsPackage,
   parseAndroidSdkPackages,
@@ -1108,5 +1323,6 @@ module.exports = {
   preferredAndroidSystemImage,
   pruneOldAndroidCommandLineTools,
   removeAndroidSdkPackages,
+  androidRosettaAvailable,
   runAndroidSdkInstall,
 };
