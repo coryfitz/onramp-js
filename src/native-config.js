@@ -6,6 +6,7 @@ const IOS_BUNDLE_PATTERN = /^[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+$/;
 const NATIVE_VERSION_PATTERN = /^\d+(?:\.\d+){1,2}$/;
 const BUILD_NUMBER_PATTERN = /^\d+(?:\.\d+)*$/;
 const { resolveEnvironmentProfile } = require('./environment');
+const { ensureIosSceneLifecycle } = require('./ios-scene-lifecycle');
 
 function writeJson(filePath, value) {
   return writeIfChanged(filePath, `${JSON.stringify(value, null, 2)}\n`);
@@ -426,6 +427,7 @@ function syncIosMetadata(outputDir, config) {
   let changed = false;
   const projectPath = findIosProjectFile(iosRoot, 'project.pbxproj');
   const infoPlistPath = findIosProjectFile(iosRoot, 'Info.plist');
+  changed = ensureIosSceneLifecycle(infoPlistPath, iosRoot) || changed;
   let project = fs.readFileSync(projectPath, 'utf8');
 
   if (config.ios.bundleIdentifier) {

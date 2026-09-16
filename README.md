@@ -106,6 +106,12 @@ layouts, which prevents newer Xcode releases from rejecting a dependency's
 obsolete target without changing the app-owned Podfile or lowering targets that
 already require a newer iOS version.
 
+OnRamp also adopts UIKit's single-window scene lifecycle in recognizable
+React Native 0.86 native projects before building them. This keeps new and
+existing apps compatible with the iOS 27 SDK while preserving app-owned React
+Native initial properties. A customized legacy `AppDelegate.swift` that OnRamp
+cannot migrate safely stops with an explanation instead of being overwritten.
+
 ### Android release signing
 
 OnRamp installs `android/onramp-release-signing.gradle` on native add/run for

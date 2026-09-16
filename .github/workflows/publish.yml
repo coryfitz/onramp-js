@@ -103,7 +103,7 @@ jobs:
           npm pack --pack-destination "${RUNNER_TEMP}"
           cd "${RUNNER_TEMP}"
           ONRAMP_JS_PACKAGE_SPEC="${package_tarball}" \
-            node "${GITHUB_WORKSPACE}/bin/onramp-js.js" create onramp-js-local-smoke
+            node "${GITHUB_WORKSPACE}/bin/onramp-js.js" create onramp-js-local-smoke --mobile
           cd "${app_dir}"
           npm audit
           npm test
@@ -164,7 +164,7 @@ jobs:
             if NPM_CONFIG_CACHE="${cache_dir}" \
               npm exec --yes --prefer-online \
                 --package "onramp-js@${PACKAGE_VERSION}" -- \
-                onramp-js create onramp-js-public-smoke; then
+                onramp-js create onramp-js-public-smoke --mobile; then
               created=true
               break
             fi

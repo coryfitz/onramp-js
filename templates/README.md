@@ -115,6 +115,12 @@ in `app.json`. The icon must be a 1024×1024 PNG inside this project. OnRamp
 synchronizes those values whenever a native platform is added or run without
 replacing other native project changes.
 
+For iOS 27 SDK compatibility, the same synchronization adopts UIKit's
+single-window scene lifecycle when it recognizes the generated React Native
+0.86 `AppDelegate.swift`. It preserves custom React Native initial properties.
+If that legacy bootstrap has been customized into an unknown shape, OnRamp
+stops with an explanation instead of rewriting it unsafely.
+
 For device-only secrets, install `react-native-keychain@^10.0.0` with
 `--legacy-peer-deps` and use `onramp-js/secure-storage`. The optional adapter
 uses non-cloud iOS Keychain protection and Android Keystore-backed storage; it

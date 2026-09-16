@@ -71,6 +71,32 @@ function createNativeProject(t) {
     '<plist><dict>\n<key>CFBundleDisplayName</key>\n<string>SwervePredict</string>\n</dict></plist>\n'
   );
   write(
+    path.join(root, 'ios', 'SwervePredict', 'AppDelegate.swift'),
+    `import UIKit
+
+@main
+class AppDelegate: UIResponder, UIApplicationDelegate {
+  var window: UIWindow?
+
+  func application(
+    _ application: UIApplication,
+    didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
+  ) -> Bool {
+    let factory = RCTReactNativeFactory(delegate: ReactNativeDelegate())
+    window = UIWindow(frame: UIScreen.main.bounds)
+    factory.startReactNative(
+      withModuleName: "SwervePredict",
+      in: window,
+      launchOptions: launchOptions
+    )
+    return true
+  }
+}
+
+class ReactNativeDelegate {}
+`
+  );
+  write(
     path.join(root, 'ios', 'SwervePredict', 'LaunchScreen.storyboard'),
     '<label text="SwervePredict" id="GJd-Yh-RWb"></label>\n'
   );
@@ -201,6 +227,29 @@ test('keeps the shared iOS launch screen free of the last development profile su
   assert.doesNotMatch(launchScreen, / Dev/);
   assert.match(fs.readFileSync(path.join(root, 'ios', 'SwervePredict', 'Info.plist'), 'utf8'), /Swerve &amp; Predict Dev/);
   assert.deepEqual(syncNativeProjects(root, config, ['ios']), []);
+});
+
+test('rejects an unsafe legacy AppDelegate before synchronizing iOS metadata', t => {
+  const root = createNativeProject(t);
+  const appDelegatePath = path.join(root, 'ios', 'SwervePredict', 'AppDelegate.swift');
+  const projectPath = path.join(root, 'ios', 'SwervePredict.xcodeproj', 'project.pbxproj');
+  const infoPlistPath = path.join(root, 'ios', 'SwervePredict', 'Info.plist');
+  const customized = fs.readFileSync(appDelegatePath, 'utf8').replace(
+    'window = UIWindow(frame: UIScreen.main.bounds)',
+    'window = CustomWindowFactory.makeWindow()'
+  );
+  write(appDelegatePath, customized);
+  const beforeProject = fs.readFileSync(projectPath, 'utf8');
+  const beforeInfoPlist = fs.readFileSync(infoPlistPath, 'utf8');
+  const config = prepareNativeConfig(root, 'swerve-predict');
+
+  assert.throws(
+    () => syncNativeProjects(root, config, ['ios']),
+    /could not safely migrate/i
+  );
+  assert.equal(fs.readFileSync(appDelegatePath, 'utf8'), customized);
+  assert.equal(fs.readFileSync(projectPath, 'utf8'), beforeProject);
+  assert.equal(fs.readFileSync(infoPlistPath, 'utf8'), beforeInfoPlist);
 });
 
 test('adds the release signing guard without replacing custom Android build types or credentials', t => {
