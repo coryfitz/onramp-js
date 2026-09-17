@@ -36,6 +36,11 @@ test('registered runtime configuration supplies generated ports to legacy app ro
     },
   };
 
+  assert.equal(
+    effectiveRuntimeConfig({apiBaseUrl: 'https://api.example.com'}).apiBaseUrl,
+    'https://api.example.com',
+  );
+
   registerRuntimeConfig(generated);
 
   assert.deepEqual(
@@ -43,8 +48,53 @@ test('registered runtime configuration supplies generated ports to legacy app ro
     generated,
   );
   assert.equal(
-    effectiveRuntimeConfig({apiBaseUrl: 'https://api.example.com'}).apiBaseUrl,
-    'https://api.example.com',
+    effectiveRuntimeConfig({apiBaseUrl: 'http://127.0.0.1:8000'}).apiBaseUrl.ios,
+    'http://127.0.0.1:8123',
+  );
+});
+
+test('registered runtime configuration overrides stale native launch properties', () => {
+  const {
+    effectiveRuntimeConfig,
+    registerRuntimeConfig,
+  } = loadRuntime(
+    'runtime-config-state.ts',
+    ['effectiveRuntimeConfig', 'registerRuntimeConfig'],
+  );
+  const generated = {
+    appEnvironment: 'development',
+    apiBaseUrl: {
+      web: 'http://localhost:8123',
+      ios: 'http://127.0.0.1:8123',
+      android: 'http://10.0.2.2:8123',
+    },
+  };
+
+  registerRuntimeConfig(generated);
+
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(effectiveRuntimeConfig({
+      appEnvironment: 'development',
+      apiBaseUrl: 'http://127.0.0.1:8000',
+    }))),
+    generated,
+  );
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(effectiveRuntimeConfig({
+      appEnvironment: 'development',
+      apiBaseUrl: 'http://10.0.2.2:8000',
+    }))),
+    generated,
+  );
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(effectiveRuntimeConfig({
+      appEnvironment: 'production',
+      apiBaseUrl: 'https://api.example.com',
+    }))),
+    {
+      appEnvironment: 'production',
+      apiBaseUrl: 'https://api.example.com',
+    },
   );
 });
 
