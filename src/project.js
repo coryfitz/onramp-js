@@ -5,12 +5,14 @@ const path = require('path');
 const packageJson = require('../package.json');
 const templatePackageJson = require('../templates/package.json');
 
-const FRONTEND_SCHEMA_VERSION = 3;
+const FRONTEND_SCHEMA_VERSION = 4;
 const FRONTEND_MANIFEST = path.join('.onramp', 'project.json');
 const MANAGED_FILES = [
   '.nvmrc',
   'babel.config.js',
   'generateRoutes.js',
+  'index.js',
+  'index.web.js',
   'metro.config.js',
   'scripts/build-routes.js',
   'src/navigation/NavigationProvider.tsx',

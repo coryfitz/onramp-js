@@ -1,16 +1,18 @@
 import React, {createContext, useContext, useMemo} from 'react';
 import {runtimePlatform} from './runtime-platform';
+import {
+  effectiveRuntimeConfig,
+  registerRuntimeConfig,
+  type RuntimeConfigInput,
+} from './runtime-config-state';
+
+export {registerRuntimeConfig};
 
 export type AppEnvironment = 'development' | 'staging' | 'production';
 
 export interface RuntimeConfig {
   appEnvironment: AppEnvironment;
   apiBaseUrl: string;
-}
-
-interface RuntimeConfigInput {
-  appEnvironment?: string;
-  apiBaseUrl?: string | Partial<Record<'web' | 'ios' | 'android', string>>;
 }
 
 const RuntimeConfigContext = createContext<RuntimeConfig | null>(null);
@@ -45,7 +47,7 @@ export function RuntimeConfigProvider({
   initialConfig?: RuntimeConfigInput;
 }) {
   const value = useMemo(
-    () => resolveRuntimeConfig(initialConfig),
+    () => resolveRuntimeConfig(effectiveRuntimeConfig(initialConfig)),
     [initialConfig],
   );
   return (

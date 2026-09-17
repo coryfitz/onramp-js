@@ -38,6 +38,12 @@ const LEGACY_MANAGED_HASHES = {
     '97969ae34773f437a02939e0fca3d70210dd7e29e6c6c6c6b8ee1f9c642ef1b3',
     '6dbbc87bbe5f555434829e0f9c1a0c160347cb6010fe782faa1a482a94450c57',
   ],
+  'index.js': [
+    '73d2c4b345b688a68bdced8434bc736572957a7e32a65023da4a0e81185fadba',
+  ],
+  'index.web.js': [
+    'ff3b3740bdc6cfc0397ba1fc597357f6486e86984109bd343ec013edf750c5b3',
+  ],
   'metro.config.js': [
     '6d6f641d82744e7c285b4fc4fd16226cb85159d6510f729b38624d205b2b8158',
     '059501a3e4789dd5f4e678b5493477a2a2e43a9a7bcabfe5b1225853117dbbb8',
@@ -67,6 +73,7 @@ const FRONTEND_MIGRATIONS = new Map([
   [0, 'adopt package-owned tooling and versioned frontend metadata'],
   [1, 'isolate generated route modules by platform'],
   [2, 'upgrade the secure Node, React Native, Metro, and webpack toolchain'],
+  [3, 'bootstrap generated runtime configuration from framework-owned entrypoints'],
 ]);
 
 const MANAGED_PACKAGE_DEPENDENCIES = {

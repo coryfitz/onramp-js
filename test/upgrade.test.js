@@ -74,11 +74,65 @@ test('plans a legacy frontend migration without overwriting known files', t => {
   const plan = planFrontendUpgrade(outputDir);
 
   assert.equal(plan.fromSchema, 0);
-  assert.equal(plan.toSchema, 3);
-  assert.equal(plan.migrations.length, 3);
+  assert.equal(plan.toSchema, 4);
+  assert.equal(plan.migrations.length, 4);
   assert.deepEqual(plan.conflicts, []);
   assert.ok(plan.changes.some(change => change.relativePath === 'babel.config.js'));
   assert.ok(plan.changes.some(change => change.relativePath === 'package.json'));
+});
+
+test('upgrades schema 3 entrypoints to bootstrap the selected backend port', t => {
+  const outputDir = createProject(t);
+  const targetContents = managedFileContents();
+  const oldNativeEntry = "import { AppRegistry } from 'react-native';\n"
+    + "import App from './App';\n"
+    + "import { name as appName } from './app.json';\n\n"
+    + 'AppRegistry.registerComponent(appName, () => App);\n';
+  const oldWebEntry = "import React from 'react';\n"
+    + "import { createRoot } from 'react-dom/client';\n"
+    + "import App from './App';\n\n"
+    + "const container = document.getElementById('root');\n"
+    + 'if (container) {\n'
+    + '  const root = createRoot(container);\n'
+    + '  root.render(<App />);\n'
+    + '}\n';
+
+  for (const [relativePath, content] of Object.entries(targetContents)) {
+    if (relativePath === 'index.js' || relativePath === 'index.web.js') continue;
+    const target = path.join(outputDir, relativePath);
+    fs.mkdirSync(path.dirname(target), {recursive: true});
+    fs.writeFileSync(target, content);
+  }
+  fs.writeFileSync(path.join(outputDir, 'index.js'), oldNativeEntry);
+  fs.writeFileSync(path.join(outputDir, 'index.web.js'), oldWebEntry);
+  const manifest = {
+    schemaVersion: 3,
+    onrampJsVersion: '0.5.42',
+    managedFiles: Object.fromEntries(
+      Object.entries(targetContents)
+        .filter(([relativePath]) => !['index.js', 'index.web.js'].includes(relativePath))
+        .map(([relativePath, content]) => [relativePath, sha256(content)]),
+    ),
+  };
+  fs.mkdirSync(path.join(outputDir, '.onramp'), {recursive: true});
+  fs.writeFileSync(
+    path.join(outputDir, FRONTEND_MANIFEST),
+    `${JSON.stringify(manifest, null, 2)}\n`,
+  );
+
+  const plan = planFrontendUpgrade(outputDir);
+
+  assert.deepEqual(plan.conflicts, []);
+  assert.deepEqual(plan.migrations, [{
+    from: 3,
+    to: 4,
+    description: 'bootstrap generated runtime configuration from framework-owned entrypoints',
+  }]);
+  for (const entrypoint of ['index.js', 'index.web.js']) {
+    const change = plan.changes.find(item => item.relativePath === entrypoint);
+    assert.ok(change);
+    assert.match(change.content, /registerRuntimeConfig\(runtimeConfig\)/);
+  }
 });
 
 test('migrates framework-owned package and Node requirements', t => {

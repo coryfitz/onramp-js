@@ -51,6 +51,8 @@ exist are left in place.
 with `npx onramp-js run <platform> --environment staging`. OnRamp writes a
 universal runtime profile with platform-specific API URLs and synchronizes the
 profile's display-name and native-identifier suffixes before a native build.
+The framework-owned entrypoints register that generated profile before the app
+renders, including when an older project has customized its `App` component.
 When the Python framework starts a local backend on a non-default port, it
 passes that port through `--backend-port`; OnRamp updates only local HTTP API
 URLs in the generated runtime profile and leaves `app.json` and remote URLs
