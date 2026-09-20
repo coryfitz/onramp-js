@@ -17,6 +17,7 @@ function printUsage() {
   onramp-js doctor [web | ios | android | mobile | all]
   onramp-js storage [--check | --clean] [--include-other-projects]
   onramp-js run <web | ios | android | mobile> [--output <directory>] [--environment <development | staging | production>] [--backend-port <port>] [--metro-port <port>] [--watch-diagnostics] [--rebuild] [--force]
+  onramp-js run ios --production [--output <directory>] [--force]
   onramp-js repair ios [--output <directory>] [--fresh]
   onramp-js upgrade [--output <directory>] [--check]
 
@@ -35,6 +36,7 @@ Options:
   --metro-port  Select a free port to use for the native Metro bundler
   --backend-port  Use this local Python backend port in native runtime URLs
   --environment  Select the development, staging, or production app profile
+  --production   Build and run the iOS Release configuration without Metro or a local backend
   --watch-diagnostics  Log source paths that can trigger native Fast Refresh
   --rebuild  Force a fresh native app build instead of reusing an unchanged installation
   --force   Accept emulator updates; mobile also deletes verified obsolete emulator files/data
@@ -177,6 +179,10 @@ function parseRunArgs(args) {
       options.rebuild = true;
       continue;
     }
+    if (argument === '--production') {
+      options.production = true;
+      continue;
+    }
     if (argument === '--force') {
       if (!['ios', 'android', 'mobile'].includes(platform)) {
         throw new Error('--force is only valid for iOS, Android, or mobile runs.');
@@ -187,6 +193,24 @@ function parseRunArgs(args) {
     throw new Error(`Unknown option: ${argument}`);
   }
 
+  if (options.production && platform !== 'ios') {
+    throw new Error('--production is only valid for iOS runs.');
+  }
+  if (options.production && options.environment && options.environment !== 'production') {
+    throw new Error('--production cannot be combined with a different environment.');
+  }
+  if (platform === 'ios' && (options.production || options.environment === 'production')) {
+    if (
+      options.backendPort !== undefined
+      || options.metroPort !== undefined
+      || options.watchDiagnostics
+      || options.rebuild
+    ) {
+      throw new Error('iOS production runs do not use a local backend, Metro, diagnostics, or --rebuild.');
+    }
+    options.production = true;
+    options.environment = 'production';
+  }
   options.output = path.resolve(options.output);
   return options;
 }

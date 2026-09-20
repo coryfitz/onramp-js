@@ -79,6 +79,33 @@ test('parses a shared staging environment for frontend and native runs', () => {
   assert.equal(options.environment, 'staging');
 });
 
+test('parses an iOS production Release run and rejects development-only options', () => {
+  const options = parseRunArgs(['ios', '--production', '--force']);
+  assert.equal(options.production, true);
+  assert.equal(options.environment, 'production');
+  assert.equal(options.forceEmulatorUpdates, true);
+  assert.equal(parseRunArgs(['ios', '--environment', 'production']).production, true);
+
+  for (const platform of ['web', 'android', 'mobile']) {
+    assert.throws(() => parseRunArgs([platform, '--production']), /only valid for iOS/);
+  }
+  assert.throws(
+    () => parseRunArgs(['ios', '--production', '--environment', 'staging']),
+    /different environment/
+  );
+  for (const option of [
+    ['--backend-port', '8000'],
+    ['--metro-port', '8081'],
+    ['--watch-diagnostics'],
+    ['--rebuild'],
+  ]) {
+    assert.throws(
+      () => parseRunArgs(['ios', '--production', ...option]),
+      /do not use a local backend, Metro, diagnostics, or --rebuild/
+    );
+  }
+});
+
 test('parses native source watcher diagnostics', () => {
   const options = parseRunArgs(['ios', '--watch-diagnostics']);
 

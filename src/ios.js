@@ -1921,7 +1921,8 @@ function iosBundleIdentifier(
   iosDir,
   nativeName,
   simulatorId,
-  environment
+  environment,
+  configuration = 'Debug'
 ) {
   const container = iosBuildContainer(iosDir, nativeName);
   if (!container) {
@@ -1934,7 +1935,7 @@ function iosBundleIdentifier(
       '-scheme',
       nativeName,
       '-configuration',
-      'Debug',
+      configuration,
       '-destination',
       `id=${simulatorId}`,
       '-showBuildSettings',
@@ -2045,9 +2046,10 @@ async function prepareIosDevelopment({
   forceEmulatorUpdates = false,
   cleanupObsolete = false,
   environment: appEnvironment,
+  production = false,
 }) {
   const outputDir = path.resolve(output || process.cwd());
-  console.log('Preparing iOS development...');
+  console.log(production ? 'Preparing iOS production Release run...' : 'Preparing iOS development...');
   const environment = await prepareIosEnvironment();
   environment.env.ONRAMP_PLATFORM = 'ios';
   if (watchDiagnostics) {
@@ -2105,26 +2107,62 @@ async function prepareIosDevelopment({
     // once an actually usable replacement has been selected and verified.
     await offerIosRuntimeCleanup(environment, { cleanupObsolete, simulatorId: simulator.id });
   }
-  const hostKeyboard = await prepareIosHostKeyboard(
+  const hostKeyboard = production ? null : await prepareIosHostKeyboard(
     simulator,
     environment
   );
-  const bundleIdentifier = resolvedIosBundleIdentifier(
-    outputDir,
-    iosDir,
-    native.nativeConfig,
-    nativeName,
-    simulator.id,
-    environment
-  );
+  const bundleIdentifier = production
+    ? iosBundleIdentifier(iosDir, nativeName, simulator.id, environment, 'Release')
+    : resolvedIosBundleIdentifier(
+      outputDir,
+      iosDir,
+      native.nativeConfig,
+      nativeName,
+      simulator.id,
+      environment
+    );
   return {
     bundleIdentifier,
     environment,
     hostKeyboard,
     outputDir,
     simulator,
-    simulatorApplication: hostKeyboard.application,
+    simulatorApplication: hostKeyboard?.application || null,
   };
+}
+
+function productionIosRunArgs(simulatorId, nativeName) {
+  return [
+    'react-native',
+    'run-ios',
+    '--udid',
+    simulatorId,
+    '--scheme',
+    nativeName,
+    '--mode',
+    'Release',
+    '--no-packager',
+  ];
+}
+
+async function launchPreparedIosProduction(prepared, dependencies = {}) {
+  const { bundleIdentifier, environment, outputDir, simulator } = prepared;
+  const runCommand = dependencies.runCommand || runAsync;
+  const isInstalled = dependencies.isInstalled || iosAppIsInstalled;
+  const activateSimulator = dependencies.activateSimulator || activateIosSimulator;
+  console.log('Building and installing the iOS Release app without Metro...');
+  await runCommand(
+    'npx',
+    productionIosRunArgs(simulator.id, nativeAppName(outputDir)),
+    outputDir,
+    environment.env,
+    { activityLabel: 'Xcode is building and installing the Release app' }
+  );
+  if (!isInstalled(simulator.id, bundleIdentifier, environment)) {
+    throw new Error(`The iOS Release app (${bundleIdentifier}) was not installed on the selected simulator.`);
+  }
+  activateSimulator(environment);
+  console.log(`iOS production app launched (${bundleIdentifier}). No local backend or Metro is running.`);
 }
 
 async function launchPreparedIos(
@@ -2250,8 +2288,14 @@ async function launchPreparedIos(
   }
 }
 
-async function runIos(options) {
-  const prepared = await prepareIosDevelopment(options);
+async function runIos(options, dependencies = {}) {
+  const prepare = dependencies.prepareIosDevelopment || prepareIosDevelopment;
+  const prepared = await prepare(options);
+  if (options.production) {
+    const launchProduction = dependencies.launchPreparedIosProduction || launchPreparedIosProduction;
+    await launchProduction(prepared);
+    return null;
+  }
   const nativeBuildBaseline = {
     ios: nativeBuildFingerprint(prepared.outputDir, 'ios'),
   };
@@ -2314,6 +2358,7 @@ module.exports = {
   iosJsLocation,
   iosProjectBundleIdentifier,
   iosPodsAreCurrent,
+  launchPreparedIosProduction,
   iosRuntimeArchitectureVariant,
   launchIosWithMetro,
   parseAvailableIosSimulatorRuntimeVersions,
@@ -2323,6 +2368,7 @@ module.exports = {
   parseIosSimulatorState,
   parsePreferredIosSimulatorRuntime,
   preferredIosSimulatorRuntime,
+  productionIosRunArgs,
   launchPreparedIos,
   prepareIosDevelopment,
   prepareIosEnvironment,

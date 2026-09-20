@@ -195,6 +195,7 @@ async function runFrontend(
     forceEmulatorUpdates,
     watchDiagnostics,
     environment,
+    production,
   },
   dependencies = {}
 ) {
@@ -210,6 +211,12 @@ async function runFrontend(
     dependencies.writeRuntimeConfig || writeRuntimeConfig
   );
   const outputDir = path.resolve(output || process.cwd());
+  if (production && platform !== 'ios') {
+    throw new Error('--production is only valid for iOS runs.');
+  }
+  if (production && environment && environment !== 'production') {
+    throw new Error('--production cannot be combined with a different environment.');
+  }
   if (forceEmulatorUpdates && !['ios', 'android', 'mobile'].includes(platform)) {
     throw new Error('--force is only valid for iOS, Android, or mobile runs.');
   }
@@ -217,6 +224,13 @@ async function runFrontend(
     throw new Error(
       '--backend-port is only valid for iOS, Android, or mobile runs.'
     );
+  }
+  const selectedEnvironment = normalizeEnvironment(production ? 'production' : environment);
+  const productionIos = platform === 'ios' && (production || selectedEnvironment === 'production');
+  if (productionIos && (
+    backendPort !== undefined || metroPort !== undefined || watchDiagnostics || rebuild
+  )) {
+    throw new Error('iOS production runs do not use a local backend, Metro, diagnostics, or --rebuild.');
   }
   requireFrontend(outputDir);
   doctorWebForRun();
@@ -227,7 +241,6 @@ async function runFrontend(
       console.warn('OnRamp storage maintenance was skipped; continuing with native launch.');
     }
   }
-  const selectedEnvironment = normalizeEnvironment(environment);
   writeRuntimeConfigForRun(
     outputDir,
     selectedEnvironment,
@@ -258,8 +271,11 @@ async function runFrontend(
       forceEmulatorUpdates,
       watchDiagnostics,
       environment: selectedEnvironment,
+      production: productionIos,
     });
-    monitorNativeBuildInputsForRun(outputDir, platform, session);
+    if (!productionIos) {
+      monitorNativeBuildInputsForRun(outputDir, platform, session);
+    }
     return;
   }
   if (platform === 'android') {

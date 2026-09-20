@@ -51,6 +51,11 @@ exist are left in place.
 with `npx onramp-js run <platform> --environment staging`. OnRamp writes a
 universal runtime profile with platform-specific API URLs and synchronizes the
 profile's display-name and native-identifier suffixes before a native build.
+For a local iOS production check, `npx onramp-js run ios --production` builds
+and launches the Release configuration on a simulator with bundled JavaScript
+and the production profile. It starts neither Metro nor a local backend; it
+does not archive, sign for distribution, or upload to TestFlight. The older
+`run ios --environment production` form uses the same Release behavior.
 The framework-owned entrypoints register that generated profile before the app
 renders, including when an older project has customized its `App` component.
 When the Python framework starts a local backend on a non-default port, it
@@ -156,6 +161,7 @@ Run the app directly through `onramp-js`:
 ```sh
 npx onramp-js run web
 npx onramp-js run ios
+npx onramp-js run ios --production
 npx onramp-js run android
 npx onramp-js run mobile
 ```
