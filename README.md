@@ -58,7 +58,11 @@ does not archive, sign for distribution, or upload to TestFlight. The older
 `run ios --environment production` form uses the same Release behavior.
 With Xcode Device Hub, leave the command open to synchronize the Mac and exact
 simulator clipboards; Ctrl+C stops sharing without uninstalling the app. OnRamp
-does not read or log clipboard contents.
+does not read or log clipboard contents. The Release launcher reconnects the
+selected simulator before building when Device Hub's hardware-keyboard default
+is enabled, so a stale connection cannot silently keep its old keyboard mode.
+If macOS blocks the preference or the connection cannot be verified, the
+launcher repeats the exact Device Hub keyboard menu to use after the build.
 The framework-owned entrypoints register that generated profile before the app
 renders, including when an older project has customized its `App` component.
 When the Python framework starts a local backend on a non-default port, it
@@ -217,8 +221,10 @@ Native launches also configure host-keyboard input before opening the selected
 device. OnRamp verifies the appropriate legacy Simulator or Xcode Device Hub
 preference on macOS. If it changes Device Hub's new-connection default while
 the selected simulator is active, OnRamp restarts only that simulator without
-wiping its apps or data. When an existing Device Hub connection cannot be
-proven to have adopted the default, or macOS denies the narrow preference
+wiping its apps or data. A local iOS Release run also reconnects the selected
+active simulator even if the default was already enabled. When an existing
+Device Hub connection cannot be proven to have adopted the default, or macOS
+denies the narrow preference
 access, OnRamp does not claim keyboard forwarding is active and prints the
 exact per-device menu to use. For Android, it repairs only AVDs in the reserved
 `OnRamp_API_*` namespace whose metadata matches OnRamp's canonical structure;

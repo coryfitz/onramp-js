@@ -1556,7 +1556,8 @@ async function prepareIosHostKeyboard(
     restarted: false,
     safeForNewConnection: state === 'Shutdown',
   };
-  if (preference.changed && (state === 'Booted' || state === 'Booting')) {
+  if ((preference.changed || options.reconnectExisting)
+      && (state === 'Booted' || state === 'Booting')) {
     log(
       `Restarting ${simulator.name} so Xcode Device Hub applies its `
       + 'hardware-keyboard setting to a new connection...'
@@ -2135,7 +2136,11 @@ async function prepareIosDevelopment({
   }
   const hostKeyboard = await prepareIosHostKeyboard(
     simulator,
-    environment
+    environment,
+    // Release builds may reuse a Device Hub connection created before the
+    // keyboard default was enabled. Reconnect this exact simulator before
+    // React Native boots it, even when the preference itself is unchanged.
+    { reconnectExisting: production }
   );
   const bundleIdentifier = production
     ? iosBundleIdentifier(iosDir, nativeName, simulator.id, environment, 'Release')
@@ -2185,6 +2190,7 @@ async function launchPreparedIosProduction(prepared, dependencies = {}) {
   const openSimulator = dependencies.openSimulator || showIosSimulator;
   const startPasteboardSync = dependencies.startPasteboardSync || startIosPasteboardSync;
   const waitForPasteboardSync = dependencies.waitForPasteboardSync || waitForIosProductionPasteboardSync;
+  const warn = dependencies.warn || console.warn;
   console.log('Building and installing the iOS Release app without Metro...');
   await runCommand(
     'npx',
@@ -2200,8 +2206,18 @@ async function launchPreparedIosProduction(prepared, dependencies = {}) {
     || hostKeyboard?.application
     || resolveIosSimulatorApplication(environment);
   openSimulator(simulator, environment, capture, fs.existsSync, application);
-  if (application.kind === 'device-hub' && hostKeyboard?.connectionVerified) {
-    console.log(`✓ Mac keyboard input is enabled for ${simulator.name} in Xcode Device Hub`);
+  if (application.kind === 'device-hub') {
+    if (hostKeyboard?.connectionVerified) {
+      console.log(`✓ Device Hub's hardware-keyboard default was enabled before ${simulator.name} connected`);
+    } else {
+      warn(
+        `Warning: Mac keyboard input could not be verified for ${simulator.name}. `
+        + 'In Device Hub, choose Device > Keyboard > Simulate Hardware Keyboard '
+        + 'for this device. If that option is unavailable, enable “Always '
+        + 'simulate hardware keyboard” in Device Hub > Settings > Interaction, '
+        + 'then reconnect the device.'
+      );
+    }
   }
   console.log(`iOS production app launched (${bundleIdentifier}). No local backend or Metro is running.`);
   if (application.kind === 'device-hub') {

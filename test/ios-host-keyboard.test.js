@@ -155,6 +155,64 @@ test('does not claim an already-connected Device Hub simulator adopted the defau
   assert.match(warnings[0], /Device > Keyboard > Simulate Hardware Keyboard/);
 });
 
+test('a Release launch reconnects an already active Device Hub simulator even when its default is enabled', async () => {
+  const calls = [];
+  const warnings = [];
+  let state = 'Booted';
+  const result = await prepareIosHostKeyboard(
+    {id: 'SIMULATOR-ID', name: 'iPhone 18 Pro'},
+    {...environment, xcrun: 'xcrun'},
+    {
+      application: {kind: 'device-hub', path: '/DeviceHub.app'},
+      captureCommand: (command, args) => {
+        calls.push([command, args]);
+        if (command === 'xcrun' && args[1] === 'shutdown') {
+          state = 'Shutdown';
+        }
+        return {status: 0, stdout: '1\n', stderr: ''};
+      },
+      log: () => {},
+      reconnectExisting: true,
+      simulatorState: () => state,
+      warn: warning => warnings.push(warning),
+    }
+  );
+
+  assert.deepEqual(calls.map(([, args]) => args), [
+    ['-container', 'com.apple.dt.Devices', 'read',
+      'com.apple.dt.Devices', 'alwaysSimulateHardwareKeyboard'],
+    ['simctl', 'shutdown', 'SIMULATOR-ID'],
+  ]);
+  assert.equal(result.preference.changed, false);
+  assert.equal(result.reconnect.restarted, true);
+  assert.equal(result.connectionVerified, true);
+  assert.deepEqual(warnings, []);
+});
+
+test('a Release launch does not restart when Device Hub keyboard preferences are inaccessible', async () => {
+  const calls = [];
+  const warnings = [];
+  const result = await prepareIosHostKeyboard(
+    {id: 'SIMULATOR-ID', name: 'iPhone 18 Pro'},
+    {...environment, xcrun: 'xcrun'},
+    {
+      application: {kind: 'device-hub', path: '/DeviceHub.app'},
+      captureCommand: (command, args) => {
+        calls.push([command, args]);
+        return {status: 1, stdout: '', stderr: 'Permission denied'};
+      },
+      log: () => {},
+      reconnectExisting: true,
+      simulatorState: () => 'Booted',
+      warn: warning => warnings.push(warning),
+    }
+  );
+
+  assert.equal(calls.some(([, args]) => args.includes('shutdown')), false);
+  assert.equal(result.connectionVerified, false);
+  assert.match(warnings[0], /Device Hub > Settings > Interaction/);
+});
+
 test('does not claim a current Device Hub connection when exact shutdown fails', async () => {
   const logs = [];
   const warnings = [];

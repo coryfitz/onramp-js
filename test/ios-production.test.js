@@ -68,6 +68,7 @@ test('a production iOS run remains usable when clipboard sync is unavailable', a
   t.after(() => fs.rmSync(output, { recursive: true, force: true }));
   fs.writeFileSync(path.join(output, 'app.json'), '{"name":"Example"}\n');
   const calls = [];
+  const warnings = [];
   await launchPreparedIosProduction({
     bundleIdentifier: 'com.example.app',
     environment: { env: {} },
@@ -80,8 +81,12 @@ test('a production iOS run remains usable when clipboard sync is unavailable', a
     openSimulator: () => calls.push('open'),
     startPasteboardSync: () => null,
     waitForPasteboardSync: () => assert.fail('Unavailable clipboard sync must not hold the run'),
+    warn: message => warnings.push(message),
   });
   assert.deepEqual(calls, ['open']);
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /Mac keyboard input could not be verified/);
+  assert.match(warnings[0], /Device > Keyboard > Simulate Hardware Keyboard/);
 });
 
 test('the production clipboard session stays open until interrupted and stops only its sync', async () => {
