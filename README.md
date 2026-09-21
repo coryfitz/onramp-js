@@ -56,6 +56,9 @@ and launches the Release configuration on a simulator with bundled JavaScript
 and the production profile. It starts neither Metro nor a local backend; it
 does not archive, sign for distribution, or upload to TestFlight. The older
 `run ios --environment production` form uses the same Release behavior.
+With Xcode Device Hub, leave the command open to synchronize the Mac and exact
+simulator clipboards; Ctrl+C stops sharing without uninstalling the app. OnRamp
+does not read or log clipboard contents.
 The framework-owned entrypoints register that generated profile before the app
 renders, including when an older project has customized its `App` component.
 When the Python framework starts a local backend on a non-default port, it

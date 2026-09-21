@@ -1781,6 +1781,32 @@ function attachIosPasteboardSync(metro, pasteboardSync) {
   return metro;
 }
 
+function waitForIosProductionPasteboardSync(pasteboardSync, signalEmitter = process) {
+  if (!pasteboardSync?.child || pasteboardSync.child.exitCode !== null) {
+    return Promise.resolve();
+  }
+  return new Promise(resolve => {
+    const finish = signal => {
+      signalEmitter.removeListener('SIGINT', onInterrupt);
+      signalEmitter.removeListener('SIGTERM', onTerminate);
+      signalEmitter.removeListener('SIGHUP', onHangup);
+      pasteboardSync.child.removeListener('exit', onExit);
+      pasteboardSync.child.removeListener('error', onExit);
+      if (signal) pasteboardSync.stop(signal);
+      resolve();
+    };
+    const onInterrupt = () => finish('SIGINT');
+    const onTerminate = () => finish('SIGTERM');
+    const onHangup = () => finish('SIGHUP');
+    const onExit = () => finish();
+    signalEmitter.once('SIGINT', onInterrupt);
+    signalEmitter.once('SIGTERM', onTerminate);
+    signalEmitter.once('SIGHUP', onHangup);
+    pasteboardSync.child.once('exit', onExit);
+    pasteboardSync.child.once('error', onExit);
+  });
+}
+
 function selectIosSimulator(
   destinations,
   environment,
@@ -2107,7 +2133,7 @@ async function prepareIosDevelopment({
     // once an actually usable replacement has been selected and verified.
     await offerIosRuntimeCleanup(environment, { cleanupObsolete, simulatorId: simulator.id });
   }
-  const hostKeyboard = production ? null : await prepareIosHostKeyboard(
+  const hostKeyboard = await prepareIosHostKeyboard(
     simulator,
     environment
   );
@@ -2127,7 +2153,7 @@ async function prepareIosDevelopment({
     hostKeyboard,
     outputDir,
     simulator,
-    simulatorApplication: hostKeyboard?.application || null,
+    simulatorApplication: hostKeyboard.application,
   };
 }
 
@@ -2146,10 +2172,19 @@ function productionIosRunArgs(simulatorId, nativeName) {
 }
 
 async function launchPreparedIosProduction(prepared, dependencies = {}) {
-  const { bundleIdentifier, environment, outputDir, simulator } = prepared;
+  const {
+    bundleIdentifier,
+    environment,
+    hostKeyboard,
+    outputDir,
+    simulator,
+    simulatorApplication,
+  } = prepared;
   const runCommand = dependencies.runCommand || runAsync;
   const isInstalled = dependencies.isInstalled || iosAppIsInstalled;
-  const activateSimulator = dependencies.activateSimulator || activateIosSimulator;
+  const openSimulator = dependencies.openSimulator || showIosSimulator;
+  const startPasteboardSync = dependencies.startPasteboardSync || startIosPasteboardSync;
+  const waitForPasteboardSync = dependencies.waitForPasteboardSync || waitForIosProductionPasteboardSync;
   console.log('Building and installing the iOS Release app without Metro...');
   await runCommand(
     'npx',
@@ -2161,8 +2196,21 @@ async function launchPreparedIosProduction(prepared, dependencies = {}) {
   if (!isInstalled(simulator.id, bundleIdentifier, environment)) {
     throw new Error(`The iOS Release app (${bundleIdentifier}) was not installed on the selected simulator.`);
   }
-  activateSimulator(environment);
+  const application = simulatorApplication
+    || hostKeyboard?.application
+    || resolveIosSimulatorApplication(environment);
+  openSimulator(simulator, environment, capture, fs.existsSync, application);
+  if (application.kind === 'device-hub' && hostKeyboard?.connectionVerified) {
+    console.log(`✓ Mac keyboard input is enabled for ${simulator.name} in Xcode Device Hub`);
+  }
   console.log(`iOS production app launched (${bundleIdentifier}). No local backend or Metro is running.`);
+  if (application.kind === 'device-hub') {
+    const pasteboardSync = startPasteboardSync(simulator, environment);
+    if (pasteboardSync) {
+      console.log('Clipboard sharing remains active while this command is open. Press Ctrl+C to stop sharing; the app stays installed.');
+      await waitForPasteboardSync(pasteboardSync);
+    }
+  }
 }
 
 async function launchPreparedIos(
@@ -2342,6 +2390,7 @@ async function repairIos({ name, output, fresh = false }) {
 module.exports = {
   activateIosSimulator,
   attachIosPasteboardSync,
+  waitForIosProductionPasteboardSync,
   availableIosSimulatorDevices,
   availableIosSimulatorRuntimes,
   availableIosSimulatorRuntimeVersions,
