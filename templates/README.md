@@ -130,6 +130,9 @@ Apps that enable OnRamp's backend accounts can import `AccountProvider`,
 `useAccount`, and generic verified-notification helpers from `onramp-js/auth`.
 Native bearer sessions use secure storage; web uses an HttpOnly cookie and
 never writes the session token to JavaScript storage.
+The `onramp-js/account-ui` export provides the default passwordless account
+modal, including sign-up, sign-in, verification, sign-out, deletion, development
+code guidance, customizable copy, and an app-owned post-deletion cleanup hook.
 
 Frontend schema and managed tooling hashes are stored in
 `.onramp/project.json`. Upgrade backups are stored in `.onramp/backups/`.

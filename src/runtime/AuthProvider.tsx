@@ -27,7 +27,7 @@ import {
 import {useRuntimeConfig} from './RuntimeConfig';
 import {clearAllNotificationContacts} from './notification-storage';
 
-interface AccountContextValue {
+export interface AccountContextValue {
   account: OnRampAccount | null;
   sessionToken: string | null;
   loading: boolean;

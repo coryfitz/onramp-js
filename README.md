@@ -75,7 +75,10 @@ Shared code can import `RuntimeConfigProvider` and `useRuntimeConfig` from
 The optional `onramp-js/auth` export provides a passwordless account provider,
 native secure-session persistence, HttpOnly-cookie web sessions, and a generic
 verified notification-subscription client for backends using OnRamp's account
-batteries.
+batteries. `onramp-js/account-ui` adds the opinionated cross-platform account
+modal for sign-up, sign-in, verification, sign-out, and deletion. It includes
+safe defaults while allowing app copy, entry-point context, and local cleanup
+after confirmed account deletion to be supplied by the app.
 
 ## Native identity and launcher assets
 
@@ -575,6 +578,31 @@ Apps should revoke when forgetting an email and clear local storage even if the
 network is unavailable. Revocation and local removal leave existing notification
 subscriptions unchanged. Successful account deletion through `AccountProvider`
 also clears all locally remembered notification contacts.
+
+### Passwordless account UI
+
+Wrap the app with `RuntimeConfigProvider` and `AccountProvider`, then render the
+framework's account modal wherever the app exposes account controls:
+
+```tsx
+import {AccountProvider} from 'onramp-js/auth';
+import {AccountModal} from 'onramp-js/account-ui';
+
+<AccountProvider>
+  <App />
+  <AccountModal visible={accountOpen} onClose={() => setAccountOpen(false)} />
+</AccountProvider>
+```
+
+The modal owns the complete passwordless flow and automatically points users at
+`.onramp/dev-mail-outbox.jsonl` only in development. Use `reasonMessage` for
+entry-point-specific context, `copy` for product language, and
+`onAccountDeleted(accountId)` to remove app-owned local records after the remote
+account has been deleted. If that cleanup hook fails, the modal accurately says
+that the account is gone while keeping the local-cleanup notice visible.
+
+`AccountDialog` is the lower-level equivalent for compatibility wrappers and
+tests that already inject `useAccount()` and the current app environment.
 
 ## OnRamp Python integration
 
