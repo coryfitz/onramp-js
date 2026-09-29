@@ -359,6 +359,20 @@ function syncAndroidMetadata(outputDir, config) {
   );
   changed = writeIfChanged(settingsPath, settings) || changed;
 
+  // Gradle's task-output cache can reuse native dependency compilation after
+  // a clean or a branch switch. Preserve any explicit project preference;
+  // Gradle user properties and command-line overrides retain their precedence.
+  const propertiesPath = path.join(androidRoot, 'gradle.properties');
+  if (fs.existsSync(propertiesPath)) {
+    const properties = fs.readFileSync(propertiesPath, 'utf8');
+    if (!/^[ \t]*org\.gradle\.caching(?:[ \t]*[=:]|[ \t]+|$)/m.test(properties)) {
+      changed = writeIfChanged(
+        propertiesPath,
+        `${properties.trimEnd()}\n\n# Reuse task outputs when native inputs match.\norg.gradle.caching=true\n`
+      ) || changed;
+    }
+  }
+
   const stringsPath = path.join(
     androidRoot,
     'app',
@@ -421,6 +435,16 @@ function copyIosIcon(iosRoot, config, infoPlistPath) {
   return changed;
 }
 
+function iosBuildSettingReplacement(value, quote = false) {
+  return (match, prefix, current) => {
+    // CocoaPods' Xcode project writer removes optional quotes. Reintroducing
+    // them for an unchanged value invalidates native reuse after pod install.
+    const unquoted = current.trim().replace(/^"(.*)"$/, '$1');
+    if (unquoted === String(value)) return match;
+    return `${prefix}${quote ? `"${value}"` : value};`;
+  };
+}
+
 function syncIosMetadata(outputDir, config) {
   const iosRoot = path.join(outputDir, 'ios');
   if (!fs.existsSync(iosRoot)) return false;
@@ -433,24 +457,24 @@ function syncIosMetadata(outputDir, config) {
   if (config.ios.bundleIdentifier) {
     project = replaceRequired(
       project,
-      /(PRODUCT_BUNDLE_IDENTIFIER\s*=\s*)[^;]+;/g,
-      `$1"${config.ios.bundleIdentifier}";`,
+      /(PRODUCT_BUNDLE_IDENTIFIER\s*=\s*)([^;]+);/g,
+      iosBuildSettingReplacement(config.ios.bundleIdentifier, true),
       'the iOS bundle identifier'
     );
   }
   if (config.ios.buildNumber) {
     project = replaceRequired(
       project,
-      /(CURRENT_PROJECT_VERSION\s*=\s*)[^;]+;/g,
-      `$1${config.ios.buildNumber};`,
+      /(CURRENT_PROJECT_VERSION\s*=\s*)([^;]+);/g,
+      iosBuildSettingReplacement(config.ios.buildNumber),
       'the iOS build number'
     );
   }
   if (config.version) {
     project = replaceRequired(
       project,
-      /(MARKETING_VERSION\s*=\s*)[^;]+;/g,
-      `$1${config.version};`,
+      /(MARKETING_VERSION\s*=\s*)([^;]+);/g,
+      iosBuildSettingReplacement(config.version),
       'the iOS marketing version'
     );
   }

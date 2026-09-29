@@ -110,6 +110,29 @@ test('derives stable identifiers and readable default display names', () => {
   assert.equal(defaultNativePackage('SwervePredict'), 'com.swervepredict');
 });
 
+test('enables Gradle task caching once while preserving explicit project preferences', t => {
+  const root = createNativeProject(t);
+  const propertiesPath = path.join(root, 'android', 'gradle.properties');
+  const config = prepareNativeConfig(root, 'swerve-predict');
+  write(propertiesPath, 'android.useAndroidX=true\n# org.gradle.caching=false\n');
+  syncNativeProjects(root, config, ['android']);
+  const enabled = fs.readFileSync(propertiesPath, 'utf8');
+  assert.match(enabled, /^org\.gradle\.caching=true$/m);
+  assert.deepEqual(syncNativeProjects(root, config, ['android']), []);
+  assert.equal(fs.readFileSync(propertiesPath, 'utf8'), enabled);
+
+  for (const preference of [
+    'org.gradle.caching=false',
+    'org.gradle.caching = true',
+    ' org.gradle.caching : false',
+    'org.gradle.caching false',
+  ]) {
+    write(propertiesPath, `${preference}\n`);
+    syncNativeProjects(root, config, ['android']);
+    assert.equal(fs.readFileSync(propertiesPath, 'utf8'), `${preference}\n`);
+  }
+});
+
 test('synchronizes declarative identity, versions, and icons idempotently', t => {
   const root = createNativeProject(t);
   const config = prepareNativeConfig(root, 'swerve-predict');
@@ -210,6 +233,23 @@ test('preserves configuration-owned iOS display names across development and pro
     syncNativeProjects(root, {...config, displayName: 'Swerve Predict'}, ['ios']);
     assert.ok(fs.readFileSync(plist, 'utf8').includes(`<string>${expression}</string>`));
   }
+});
+
+test('preserves CocoaPods-normalized Xcode values without invalidating native reuse', t => {
+  const root = createNativeProject(t);
+  const config = prepareNativeConfig(root, 'swerve-predict');
+  syncNativeProjects(root, config, ['ios']);
+  const projectPath = path.join(root, 'ios', 'SwervePredict.xcodeproj', 'project.pbxproj');
+  const normalized = fs.readFileSync(projectPath, 'utf8')
+    .replaceAll('"com.swerve.predict.ios"', 'com.swerve.predict.ios')
+    .replaceAll('CURRENT_PROJECT_VERSION = 9;', 'CURRENT_PROJECT_VERSION = "9";')
+    .replaceAll('MARKETING_VERSION = 1.2.3;', 'MARKETING_VERSION = "1.2.3";');
+  write(projectPath, normalized);
+  const {nativeBuildFingerprint} = require('../src/native-build-cache');
+  const before = nativeBuildFingerprint(root, 'ios');
+  assert.deepEqual(syncNativeProjects(root, config, ['ios']), []);
+  assert.equal(fs.readFileSync(projectPath, 'utf8'), normalized);
+  assert.equal(nativeBuildFingerprint(root, 'ios'), before);
 });
 
 test('keeps the shared iOS launch screen free of the last development profile suffix', t => {

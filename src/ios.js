@@ -21,6 +21,7 @@ const { promptYesNo } = require('./prompt');
 const { offerIosRuntimeCleanup } = require('./ios-runtime-cleanup');
 const { syncIosNodeEnvironment } = require('./ios-node-env');
 const { ensureIosPodsDeploymentTarget } = require('./ios-pods-deployment-target');
+const { iosPodsAreCurrent, iosPodsSourceFingerprint, recordIosPods } = require('./ios-pods-cache');
 
 const IOS_DESTINATION_QUERY_ATTEMPTS = 3;
 const IOS_DESTINATION_RETRY_DELAY_MS = 500;
@@ -503,27 +504,6 @@ function applyFmtAppleClangWorkaround(iosDir, environment) {
   console.log(`✓ Applied the React Native fmt adjustment for Apple Clang ${clangMajor}`);
 }
 
-function iosPodsAreCurrent(iosDir, outputDir = path.dirname(iosDir)) {
-  const lockfile = path.join(iosDir, 'Podfile.lock');
-  const manifest = path.join(iosDir, 'Pods', 'Manifest.lock');
-  if (!fs.existsSync(lockfile) || !fs.existsSync(manifest)) {
-    return false;
-  }
-  if (fs.readFileSync(lockfile, 'utf8') !== fs.readFileSync(manifest, 'utf8')) {
-    return false;
-  }
-
-  const manifestTime = fs.statSync(manifest).mtimeMs;
-  const dependencyInputs = [
-    path.join(iosDir, 'Podfile'),
-    path.join(outputDir, 'package.json'),
-    path.join(outputDir, 'package-lock.json'),
-  ].filter(filePath => fs.existsSync(filePath));
-  return dependencyInputs.every(
-    filePath => fs.statSync(filePath).mtimeMs <= manifestTime
-  );
-}
-
 function applyIosPodsCompatibilityAdjustments(iosDir, outputDir, environment) {
   applyFmtAppleClangWorkaround(iosDir, environment);
   const deploymentTargets = ensureIosPodsDeploymentTarget(iosDir, outputDir);
@@ -537,6 +517,15 @@ function applyIosPodsCompatibilityAdjustments(iosDir, outputDir, environment) {
 
 function ensureIosPods(iosDir, environment, options = {}) {
   const outputDir = options.outputDir || path.dirname(iosDir);
+  const dependencySources = iosPodsSourceFingerprint(iosDir, outputDir);
+  const recordInstalledPods = () => {
+    if (!recordIosPods(iosDir, outputDir, dependencySources)) {
+      throw new Error(
+        'iOS dependency inputs changed during setup. Run OnRamp again so Pods '
+        + 'and the native app use the same dependency settings.'
+      );
+    }
+  };
   const nodeEnvironment = syncIosNodeEnvironment(iosDir);
   if (nodeEnvironment.changed) {
     console.log('✓ Xcode now uses the Node executable selected for this OnRamp run');
@@ -546,11 +535,13 @@ function ensureIosPods(iosDir, environment, options = {}) {
   if (!options.force && iosPodsAreCurrent(iosDir, outputDir)) {
     console.log('✓ iOS Pods are current');
     applyIosPodsCompatibilityAdjustments(iosDir, outputDir, environment);
+    recordInstalledPods();
     return;
   }
   console.log('Ensuring iOS dependencies (Pods)...');
-  run(environment.pod, ['install'], iosDir, environment.env);
+  (options.runCommand || run)(environment.pod, ['install'], iosDir, environment.env);
   applyIosPodsCompatibilityAdjustments(iosDir, outputDir, environment);
+  recordInstalledPods();
   console.log('✓ iOS dependencies installed');
 }
 
@@ -2237,7 +2228,8 @@ async function launchPreparedIos(
     metroInteractive = true,
     metroLabel,
     rebuild = false,
-  } = {}
+  } = {},
+  dependencies = {}
 ) {
   const {
     bundleIdentifier,
@@ -2247,6 +2239,17 @@ async function launchPreparedIos(
     simulator,
     simulatorApplication,
   } = prepared;
+  const bootSimulator = dependencies.bootSimulator || ensureIosSimulatorBooted;
+  const openSimulator = dependencies.openSimulator || showIosSimulator;
+  const startMetroServer = dependencies.startMetro || startMetro;
+  const warmBundle = dependencies.warmMetroBundle || warmMetroBundle;
+  const fingerprintInputs = dependencies.nativeBuildFingerprint || nativeBuildFingerprint;
+  const readCachedBuild = dependencies.cachedNativeBuild || cachedNativeBuild;
+  const isInstalled = dependencies.isInstalled || iosAppIsInstalled;
+  const runCommand = dependencies.runCommand || runAsync;
+  const launchApp = dependencies.launchApp || launchIosWithMetro;
+  const recordBuild = dependencies.recordNativeBuild || recordNativeBuild;
+  const activateSimulator = dependencies.activateSimulator || activateIosSimulator;
   const resolvedSimulatorApplication = simulatorApplication
     || hostKeyboard?.application
     || resolveIosSimulatorApplication(environment);
@@ -2256,8 +2259,8 @@ async function launchPreparedIos(
     { application: resolvedSimulatorApplication }
   );
   console.log('Starting iOS simulator...');
-  ensureIosSimulatorBooted(simulator, environment);
-  showIosSimulator(
+  bootSimulator(simulator, environment);
+  openSimulator(
     simulator,
     environment,
     capture,
@@ -2272,7 +2275,7 @@ async function launchPreparedIos(
       `✓ Mac keyboard input is enabled for ${simulator.name} in Xcode Device Hub`
     );
   }
-  const metro = await startMetro({
+  const metro = await startMetroServer({
     output: outputDir,
     requestedPort: metroPort,
     startingPort: metroStartingPort,
@@ -2288,31 +2291,26 @@ async function launchPreparedIos(
         startIosPasteboardSync(simulator, environment)
       );
     }
-    await warmMetroBundle({ port: metro.port, platform: 'ios' });
-    const fingerprint = nativeBuildFingerprint(outputDir, 'ios');
-    const cached = cachedNativeBuild(outputDir, 'ios');
-    const reuseInstalled = (
+    let fingerprint = fingerprintInputs(outputDir, 'ios');
+    const cached = readCachedBuild(outputDir, 'ios');
+    let reuseInstalled = (
       !rebuild
       && cached
       && cached.fingerprint === fingerprint
       && cached.bundleIdentifier === bundleIdentifier
       && cached.simulatorId === simulator.id
-      && iosAppIsInstalled(
+      && isInstalled(
         simulator.id,
         bundleIdentifier,
         environment
       )
     );
-    if (reuseInstalled) {
-      console.log(
-        '✓ iOS native inputs are unchanged; opening the installed app without rebuilding'
-      );
-    } else {
+    const buildNative = async () => {
       console.log('Building and installing the iOS app...');
       console.log(
         'Xcode may be quiet while finalizing build settings; OnRamp will keep reporting activity.'
       );
-      await runAsync(
+      await runCommand(
         'npx',
         [
           'react-native',
@@ -2330,20 +2328,47 @@ async function launchPreparedIos(
           inheritInput: metroInteractive,
         }
       );
+    };
+    // Metro's first JS bundle and Xcode's native compilation are independent.
+    // Wait for both even on failure so a rejected bundle never leaves an
+    // unobserved native build installing an app after this run has returned.
+    const [bundlePreparation, nativePreparation] = await Promise.allSettled([
+      Promise.resolve().then(() => warmBundle({ port: metro.port, platform: 'ios' })),
+      Promise.resolve().then(async () => {
+        if (reuseInstalled) {
+          console.log(
+            '✓ iOS native inputs are unchanged; opening the installed app without rebuilding'
+          );
+          return;
+        }
+        await buildNative();
+      }),
+    ]);
+    for (const result of [nativePreparation, bundlePreparation]) {
+      if (result.status === 'rejected') throw result.reason;
     }
-    launchIosWithMetro(
+    if (reuseInstalled) {
+      const currentFingerprint = fingerprintInputs(outputDir, 'ios');
+      if (currentFingerprint !== fingerprint
+        || !isInstalled(simulator.id, bundleIdentifier, environment)) {
+        reuseInstalled = false;
+        fingerprint = currentFingerprint;
+        await buildNative();
+      }
+    }
+    launchApp(
       simulator.id,
       bundleIdentifier,
       metro.port,
       environment
     );
     if (!reuseInstalled) {
-      recordNativeBuild(outputDir, 'ios', {
+      recordBuild(outputDir, 'ios', {
         bundleIdentifier,
         simulatorId: simulator.id,
-      });
+      }, fingerprint);
     }
-    activateIosSimulator(environment);
+    activateSimulator(environment);
     console.log('iOS app launched. Metro remains active; press Ctrl+C to stop.');
     return metro;
   } catch (error) {

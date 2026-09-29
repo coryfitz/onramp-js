@@ -102,11 +102,19 @@ function cachedNativeBuild(outputDir, platform) {
   return readNativeBuildState(outputDir)[platform] || null;
 }
 
-function recordNativeBuild(outputDir, platform, details = {}) {
+function recordNativeBuild(outputDir, platform, details = {}, expectedFingerprint) {
+  const fingerprint = nativeBuildFingerprint(outputDir, platform);
+  if (expectedFingerprint !== undefined && fingerprint !== expectedFingerprint) {
+    // A successful compiler exit does not prove that inputs edited while it
+    // was running made it into the installed binary. Force the next run to
+    // build again instead of blessing those new inputs as already installed.
+    clearNativeBuildState(outputDir, platform);
+    return null;
+  }
   const state = readNativeBuildState(outputDir);
   state[platform] = {
     ...details,
-    fingerprint: nativeBuildFingerprint(outputDir, platform),
+    fingerprint,
   };
   const statePath = nativeBuildStatePath(outputDir);
   const temporary = `${statePath}.${process.pid}.tmp`;

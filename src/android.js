@@ -3600,6 +3600,10 @@ async function prepareAndroidEnvironment(options = {}) {
           sdk: environment.sdk,
           env: environment.env,
           replacementPackagePath: replacementMetadata.packagePath,
+          // Reuse this preparation's inventory when no image was installed.
+          // Cleanup still reads a fresh inventory before each removal; an
+          // image installation needs a new initial inventory as well.
+          packages: imageNeedsInstall ? undefined : packages,
           promptYesNo: ask,
           cleanupObsolete: options.cleanupObsolete === true,
           listPackagesFn: (manager, sdk, env) => (
@@ -3853,10 +3857,9 @@ async function launchPreparedAndroid(
   console.log(`Using Node.js v${process.versions.node} environment`);
   console.log(`Using Metro port ${metro.port}`);
   try {
-    await warmMetroBundle({ port: metro.port, platform: 'android' });
     const fingerprint = nativeBuildFingerprint(outputDir, 'android');
     const cached = cachedNativeBuild(outputDir, 'android');
-    const reuseInstalled = (
+    let reuseInstalled = (
       !rebuild
       && cached
       && cached.fingerprint === fingerprint
@@ -3869,6 +3872,13 @@ async function launchPreparedAndroid(
         applicationId
       )
     );
+    let bundlePreparation;
+    if (reuseInstalled) {
+      bundlePreparation = warmMetroBundle({ port: metro.port, platform: 'android' });
+      await bundlePreparation;
+      // Inputs can change while Metro is transforming the first bundle.
+      reuseInstalled = nativeBuildFingerprint(outputDir, 'android') === fingerprint;
+    }
     if (reuseInstalled) {
       console.log(
         '✓ Android native inputs are unchanged; opening the installed app without rebuilding'
@@ -3880,24 +3890,33 @@ async function launchPreparedAndroid(
         metro.port
       );
     } else {
+      const buildFingerprint = nativeBuildFingerprint(outputDir, 'android');
       console.log(
         'Building and installing the Android app for the active emulator architecture...'
       );
-      await runAsync(
-        'npx',
-        androidRunArguments(metro.port, device, applicationId),
-        outputDir,
-        environment.env,
-        {
-          activityLabel: 'Android is still building and installing',
-          inheritInput: metroInteractive,
-        }
-      );
+      // Metro transforms JavaScript independently of Gradle's native build.
+      // Await both even if either fails so no build process is abandoned and
+      // a failed first bundle cannot mark the launch as successful.
+      const [bundle, build] = await Promise.allSettled([
+        bundlePreparation || warmMetroBundle({ port: metro.port, platform: 'android' }),
+        runAsync(
+          'npx',
+          androidRunArguments(metro.port, device, applicationId),
+          outputDir,
+          environment.env,
+          {
+            activityLabel: 'Android is still building and installing',
+            inheritInput: metroInteractive,
+          }
+        ),
+      ]);
+      if (build.status === 'rejected') throw build.reason;
+      if (bundle.status === 'rejected') throw bundle.reason;
       recordNativeBuild(outputDir, 'android', {
         applicationId,
         avd: environment.avd,
         metroPort: metro.port,
-      });
+      }, buildFingerprint);
     }
     wakeAndroidEmulators(environment.adb, environment.env);
     const activation = safelyActivateAndroidEmulator(

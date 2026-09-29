@@ -106,3 +106,36 @@ test('records and clears project-local native launch state under the npm cache',
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('does not cache native inputs edited while a build was in progress', () => {
+  const root = makeProject();
+  try {
+    const android = recordNativeBuild(root, 'android', { applicationId: 'com.example' });
+    recordNativeBuild(root, 'ios', { bundleIdentifier: 'com.example.old' });
+    const beforeBuild = nativeBuildFingerprint(root, 'ios');
+    fs.appendFileSync(path.join(root, 'ios', 'Podfile'), '# changed during build\n');
+    assert.equal(recordNativeBuild(root, 'ios', {
+      bundleIdentifier: 'com.example.new',
+    }, beforeBuild), null);
+    assert.equal(cachedNativeBuild(root, 'ios'), null);
+    assert.deepEqual(cachedNativeBuild(root, 'android'), android);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('records a completed build when its native inputs still match the build snapshot', () => {
+  const root = makeProject();
+  try {
+    const beforeBuild = nativeBuildFingerprint(root, 'android');
+    fs.mkdirSync(path.join(root, 'android', 'app', 'build'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'android', 'app', 'build', 'generated.apk'), 'build output');
+    const recorded = recordNativeBuild(root, 'android', {
+      applicationId: 'com.example',
+    }, beforeBuild);
+    assert.equal(recorded.fingerprint, beforeBuild);
+    assert.deepEqual(cachedNativeBuild(root, 'android'), recorded);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});

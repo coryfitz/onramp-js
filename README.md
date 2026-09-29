@@ -215,8 +215,16 @@ available port above it. The two Metro
 servers cannot consume terminal input, and their concurrent output is prefixed
 with `[iOS]` and `[Android]`. Standalone platform runs retain Metro's keyboard
 controls.
-Each native launcher prepares its first complete Metro bundle before opening
-the app, avoiding cold-start bundle timeouts on newly generated projects.
+Each native launcher prepares its first Metro bundle alongside native
+compilation when a build is required, and waits for both before reporting a
+successful launch. This overlaps JavaScript transformation with Xcode or Gradle
+without running both native compilers at once. Reused apps wait for the bundle
+before opening, avoiding cold-start bundle timeouts on newly generated projects.
+On iOS, verified Pod installations use content-based dependency checks, so
+touching unchanged package files does not repeat `pod install`; missing or
+mismatched Pod lockfiles still require dependency setup.
+Native synchronization also preserves equivalent quoted or unquoted Xcode
+settings, avoiding an extra rebuild after CocoaPods normalizes the project.
 The iOS simulator connects to Metro through the numeric IPv4 loopback address,
 avoiding repeated Fast Refresh disconnects caused by `localhost` resolution in
 iOS 26 simulator runtimes.
@@ -359,7 +367,13 @@ explicitly targets that selected emulator even when another device is online. On
 enables host clipboard sharing and cold-starts the selected emulator. The cold
 start bypasses stale Quick Boot state without wiping the virtual device's apps
 or data, while disabling the boot animation to shorten that full boot. Android
-native builds target only the active emulator architecture. OnRamp maps the
+native builds target only the active emulator architecture. OnRamp enables
+[Gradle's task-output cache](https://docs.gradle.org/current/userguide/build_cache.html)
+when `android/gradle.properties` has no explicit `org.gradle.caching` setting.
+This reuses matching compilation outputs after cleans and branch switches;
+set `org.gradle.caching=false` to opt out. It uses Gradle's local cache by
+default and does not configure a remote cache.
+OnRamp maps the
 selected `emulator-PORT` serial to its exact host process and asks the desktop
 to bring that window forward after either reusing or booting it and again after
 the app opens. It verifies final focus where the desktop exposes it. On macOS,

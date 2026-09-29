@@ -103,6 +103,36 @@ test('Android updates remain opt-in without force', async t => {
   assert.deepEqual(f.installs, []);
 });
 
+test('reuses the checked package inventory for initial Android cleanup inspection', async t => {
+  const f = fixture(t);
+  f.packages.get('emulator').availableVersion = '36.2.1';
+  let checks = 0;
+  let cleanup;
+  await prepareAndroidEnvironment({
+    ...f.options,
+    listPackages: () => { checks += 1; return f.packages; },
+    cleanupSystemImages: async options => { cleanup = options; },
+  });
+  assert.equal(checks, 1);
+  assert.equal(cleanup.packages, f.packages);
+  // The callback retained for checks immediately before deletion must still
+  // query the provider instead of returning the earlier inventory.
+  cleanup.listPackagesFn('manager', 'sdk', {});
+  assert.equal(checks, 2);
+});
+
+test('does not reuse an Android package inventory taken before image installation', async t => {
+  const f = fixture(t, { imageRevision: true });
+  let cleanup;
+  await prepareAndroidEnvironment({
+    ...f.options,
+    forceEmulatorUpdates: true,
+    cleanupSystemImages: async options => { cleanup = options; },
+  });
+  assert.deepEqual(f.installs, [['emulator'], [f.image(35)]]);
+  assert.equal(cleanup.packages, undefined);
+});
+
 test('force updates an installed Android system image revision without prompting', async t => {
   const f = fixture(t, { imageRevision: true });
   await prepareAndroidEnvironment({ ...f.options, forceEmulatorUpdates: true });
