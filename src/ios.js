@@ -2030,6 +2030,34 @@ function iosJsLocation(metroPort) {
   return `127.0.0.1:${metroPort}`;
 }
 
+function persistIosMetroLocation(
+  simulatorId,
+  bundleIdentifier,
+  metroPort,
+  environment,
+  captureCommand = capture
+) {
+  const jsLocation = iosJsLocation(metroPort);
+  // A simctl launch argument is available only to that process. Persisting the
+  // same value in the app's defaults keeps a later Home-screen relaunch on the
+  // numeric IPv4 endpoint instead of React Native's localhost fallback.
+  captureCommand(
+    environment.xcrun,
+    [
+      'simctl',
+      'spawn',
+      simulatorId,
+      'defaults',
+      'write',
+      bundleIdentifier,
+      'RCT_jsLocation',
+      jsLocation,
+    ],
+    { env: environment.env }
+  );
+  return jsLocation;
+}
+
 function launchIosWithMetro(
   simulatorId,
   bundleIdentifier,
@@ -2039,7 +2067,12 @@ function launchIosWithMetro(
   // RCTBundleURLProvider expects a host (and optional port), not a full URL.
   // Supplying http:// here causes React Native to construct http://http://...
   // and silently fall back to its default Metro port.
-  const jsLocation = iosJsLocation(metroPort);
+  const jsLocation = persistIosMetroLocation(
+    simulatorId,
+    bundleIdentifier,
+    metroPort,
+    environment
+  );
   console.log(`Binding ${bundleIdentifier} to Metro at ${jsLocation}`);
   run(
     environment.xcrun,
@@ -2446,6 +2479,7 @@ module.exports = {
   iosBundleIdentifier,
   iosAppIsInstalled,
   iosJsLocation,
+  persistIosMetroLocation,
   iosProjectBundleIdentifier,
   iosPodsAreCurrent,
   launchPreparedIosProduction,

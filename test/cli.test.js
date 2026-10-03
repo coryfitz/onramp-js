@@ -24,6 +24,7 @@ const {
   parseBuildSetting,
   parsePreferredIosSimulatorRuntime,
   prepareIosEnvironment,
+  persistIosMetroLocation,
   queryEligibleIosSimulatorsWithRetry,
   selectIosSimulator,
   showIosSimulator,
@@ -375,6 +376,40 @@ test('extracts the product bundle identifier from Xcode build settings', () => {
 
 test('uses IPv4 loopback for stable iOS simulator Fast Refresh', () => {
   assert.equal(iosJsLocation(8082), '127.0.0.1:8082');
+});
+
+test('persists the iOS Metro endpoint for ordinary simulator relaunches', () => {
+  const calls = [];
+  const environment = {
+    env: { PATH: '/example/bin' },
+    xcrun: '/usr/bin/xcrun',
+  };
+  const location = persistIosMetroLocation(
+    'SIMULATOR-ID',
+    'com.example.app.dev',
+    8082,
+    environment,
+    (...args) => {
+      calls.push(args);
+      return { status: 0, stderr: '', stdout: '' };
+    }
+  );
+
+  assert.equal(location, '127.0.0.1:8082');
+  assert.deepEqual(calls, [[
+    '/usr/bin/xcrun',
+    [
+      'simctl',
+      'spawn',
+      'SIMULATOR-ID',
+      'defaults',
+      'write',
+      'com.example.app.dev',
+      'RCT_jsLocation',
+      '127.0.0.1:8082',
+    ],
+    { env: environment.env },
+  ]]);
 });
 
 test('recognizes only available iOS simulator runtimes', () => {

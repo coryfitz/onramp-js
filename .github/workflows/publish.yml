@@ -104,7 +104,7 @@ jobs:
           ONRAMP_JS_PACKAGE_SPEC="${package_tarball}" \
             node "${GITHUB_WORKSPACE}/bin/onramp-js.js" create onramp-js-local-smoke --mobile
           cd "${app_dir}"
-          npm audit
+          node -e "require('onramp-js/audit').runNpmAudit()"
           npm test
           npm run typecheck
           npm run build:web -- --fail-on-warnings
@@ -176,7 +176,7 @@ jobs:
             exit 1
           fi
           cd "${app_dir}"
-          npm audit
+          node -e "require('onramp-js/audit').runNpmAudit()"
           npm test
           npm run typecheck
           npm run build:web -- --fail-on-warnings

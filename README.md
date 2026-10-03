@@ -227,7 +227,10 @@ Native synchronization also preserves equivalent quoted or unquoted Xcode
 settings, avoiding an extra rebuild after CocoaPods normalizes the project.
 The iOS simulator connects to Metro through the numeric IPv4 loopback address,
 avoiding repeated Fast Refresh disconnects caused by `localhost` resolution in
-iOS 26 simulator runtimes.
+iOS 26 simulator runtimes. Each development run also saves that exact endpoint
+in the simulator app's preferences. Reopening the installed app from the Home
+screen therefore keeps the stable connection; running OnRamp again updates the
+saved value if Metro selects a different port.
 Native launches also configure host-keyboard input before opening the selected
 device. OnRamp verifies the appropriate legacy Simulator or Xcode Device Hub
 preference on macOS. If it changes Device Hub's new-connection default while
@@ -252,6 +255,11 @@ contents changed. OnRamp lets Metro calculate each delta, suppresses only HMR
 cycles with no added, modified, or deleted modules, and continues to deliver
 real source edits normally. This avoids a repeated `Refreshing...` banner
 without disabling Fast Refresh or changing route discovery.
+
+Release smoke tests still fail on every unexpected npm advisory. They currently
+accept only the exact transitive `braces` stack-exhaustion advisory while no
+patched `braces` release exists, and print that exception explicitly. A changed
+advisory or any additional finding fails closed.
 
 The run command stays attached to the Metro process after the app launches.
 Press Ctrl+C to stop that project-owned server cleanly.

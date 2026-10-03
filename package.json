@@ -1,6 +1,6 @@
 {
   "name": "onramp-js",
-  "version": "0.5.49",
+  "version": "0.5.50",
   "description": "Web-first universal React Native app generator for web, iOS, and Android",
   "author": "Cory Fitz",
   "license": "MIT",
@@ -20,6 +20,7 @@
   },
   "exports": {
     "./account-ui": "./src/runtime/AccountModal.tsx",
+    "./audit": "./src/audit.js",
     "./auth": "./src/runtime/AuthProvider.tsx",
     "./babel": "./src/babel.js",
     "./environment": "./src/environment.js",
