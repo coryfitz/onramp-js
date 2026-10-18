@@ -11,6 +11,7 @@ import {
   TextInput,
   View,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { useAccount, type AccountContextValue } from './AuthProvider';
 import { useRuntimeConfig, type AppEnvironment } from './RuntimeConfig';
@@ -117,6 +118,7 @@ export function AccountDialog({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [cleanupNotice, setCleanupNotice] = useState('');
+  const safeAreaInsets = useSafeAreaInsets();
 
   useEffect(() => {
     if (!visible) setCleanupNotice('');
@@ -228,7 +230,14 @@ export function AccountDialog({
     >
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        style={styles.root}
+        style={[
+          styles.root,
+          {
+            paddingBottom: safeAreaInsets.bottom,
+            paddingTop: safeAreaInsets.top,
+          },
+        ]}
+        testID="account-dialog-safe-area"
       >
         <View style={styles.header}>
           <View>
@@ -240,6 +249,7 @@ export function AccountDialog({
           <Pressable
             accessibilityLabel={copy.closeAccessibilityLabel}
             accessibilityRole="button"
+            hitSlop={8}
             onPress={onClose}
             style={styles.closeButton}
           >

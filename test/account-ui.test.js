@@ -42,3 +42,18 @@ test('account UI ships an opinionated modal and app-specific deletion cleanup ho
     /Development codes are written to \.onramp\/dev-mail-outbox\.jsonl/,
   );
 });
+
+test('account modal keeps its close control inside native safe areas', () => {
+  const source = fs.readFileSync(
+    path.join(__dirname, '..', 'src', 'runtime', 'AccountModal.tsx'),
+    'utf8',
+  );
+  assert.match(
+    source,
+    /import \{ useSafeAreaInsets \} from 'react-native-safe-area-context';/,
+  );
+  assert.match(source, /paddingBottom: safeAreaInsets\.bottom/);
+  assert.match(source, /paddingTop: safeAreaInsets\.top/);
+  assert.match(source, /testID="account-dialog-safe-area"/);
+  assert.match(source, /hitSlop=\{8\}/);
+});
