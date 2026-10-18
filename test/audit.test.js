@@ -22,21 +22,28 @@ const BRACES_ADVISORY = {
   url: 'https://github.com/advisories/GHSA-vfj7-8cjw-p6xm',
 };
 
-function runnerFor(result, latestVersion = '3.0.3') {
+const SPRINTF_JS_ADVISORY = {
+  name: 'sprintf-js',
+  range: '<=1.1.3',
+  source: 1241202,
+  url: 'https://github.com/advisories/GHSA-hp3w-g68c-fv3c',
+};
+
+function runnerFor(result, latestVersions = {
+  braces: '3.0.3',
+  'sprintf-js': '1.1.3',
+}) {
   return (_command, args) => {
     if (args[0] === 'audit') return result;
-    assert.deepEqual(args, [
-      'view',
-      'braces',
-      'version',
-      '--json',
-      '--prefer-online',
-    ]);
+    assert.equal(args[0], 'view');
+    assert.equal(args[2], 'version');
+    assert.deepEqual(args.slice(3), ['--json', '--prefer-online']);
+    assert.ok(Object.hasOwn(latestVersions, args[1]));
     return {
       error: undefined,
       status: 0,
       stderr: '',
-      stdout: JSON.stringify(latestVersion),
+      stdout: JSON.stringify(latestVersions[args[1]]),
     };
   };
 }
@@ -73,9 +80,31 @@ test('accepts only dependency chains rooted in the reviewed unpatched advisory',
   assert.match(messages[0], /GHSA-vfj7-8cjw-p6xm/);
 });
 
+test('accepts the reviewed unpatched advisory in transitive Jest tooling', () => {
+  const messages = [];
+  const report = runNpmAudit({
+    log: message => messages.push(message),
+    runner: runnerFor(auditResult({
+      status: 1,
+      total: 3,
+      vulnerabilities: {
+        'sprintf-js': { via: [SPRINTF_JS_ADVISORY] },
+        argparse: { via: ['sprintf-js'] },
+        'js-yaml': { via: ['argparse'] },
+      },
+    })),
+  });
+
+  assert.equal(report.metadata.vulnerabilities.total, 3);
+  assert.equal(messages.length, 1);
+  assert.match(messages[0], /Jest development-tooling advisory/);
+  assert.match(messages[0], /GHSA-hp3w-g68c-fv3c/);
+});
+
 test('fails for any additional or changed npm advisory', () => {
   for (const advisory of [
     { ...BRACES_ADVISORY, range: '<=3.0.4' },
+    { ...SPRINTF_JS_ADVISORY, range: '<=1.1.4' },
     {
       name: 'other-package',
       range: '<1.0.0',
@@ -103,7 +132,7 @@ test('fails when a new upstream release makes the reviewed exception stale', () 
         status: 1,
         total: 1,
         vulnerabilities: { braces: { via: [BRACES_ADVISORY] } },
-      }), '3.0.4'),
+      }), { braces: '3.0.4' }),
     }),
     /exception for braces is stale.*found 3\.0\.4/
   );

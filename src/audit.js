@@ -2,10 +2,22 @@ const { spawnSync } = require('child_process');
 
 const REVIEWED_NPM_AUDIT_EXCEPTIONS = new Map([
   [1240992, {
+    explanation:
+      'All released braces versions are affected and no patched version exists; '
+      + 'OnRamp accepts this transitive build-tooling advisory until upstream publishes a fix.',
     latestReviewedVersion: '3.0.3',
     name: 'braces',
     range: '<=3.0.3',
     url: 'https://github.com/advisories/GHSA-vfj7-8cjw-p6xm',
+  }],
+  [1241202, {
+    explanation:
+      'All released sprintf-js versions are affected and no patched version exists; '
+      + 'OnRamp accepts this transitive Jest development-tooling advisory until upstream publishes a fix.',
+    latestReviewedVersion: '1.1.3',
+    name: 'sprintf-js',
+    range: '<=1.1.3',
+    url: 'https://github.com/advisories/GHSA-hp3w-g68c-fv3c',
   }],
 ]);
 
@@ -145,11 +157,11 @@ function runNpmAudit({
     }
   }
 
-  const reviewed = REVIEWED_NPM_AUDIT_EXCEPTIONS.values().next().value;
+  const reviewed = [...reviewedSources]
+    .map(source => REVIEWED_NPM_AUDIT_EXCEPTIONS.get(source));
   log(
-    `⚠ npm audit found only ${reviewed.url}. `
-    + 'All released braces versions are affected and no patched version exists; '
-    + 'OnRamp accepts this transitive build-tooling advisory until upstream publishes a fix.'
+    '⚠ npm audit found only reviewed advisories:\n'
+    + reviewed.map(item => `- ${item.url}: ${item.explanation}`).join('\n')
   );
   return report;
 }
