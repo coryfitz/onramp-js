@@ -764,7 +764,7 @@ test('offers the Xcode App Store page when Simulator itself is missing', async (
   ]);
 });
 
-test('selects a simulator on the newest installed iOS runtime', () => {
+test('keeps using an already-booted iPhone across installed iOS runtimes', () => {
   const selected = selectIosSimulator(
     [
       { id: 'OLD', name: 'iPhone 16', os: '18.6' },
@@ -774,7 +774,97 @@ test('selects a simulator on the newest installed iOS runtime', () => {
     new Set(['OLD'])
   );
 
+  assert.equal(selected.id, 'OLD');
+});
+
+test('selects an iPhone on the newest installed iOS runtime when none is booted', () => {
+  const selected = selectIosSimulator(
+    [
+      { id: 'OLD', name: 'iPhone 16', os: '18.6' },
+      { id: 'NEW-IPAD', name: 'iPad Pro', os: '26.5' },
+      { id: 'NEW-IPHONE', name: 'iPhone 17', os: '26.5' },
+    ],
+    { env: {}, xcrun: 'xcrun' },
+    new Set()
+  );
+
+  assert.equal(selected.id, 'NEW-IPHONE');
+});
+
+test('selects the newest iPhone when more than one available iPhone is booted', () => {
+  const selected = selectIosSimulator(
+    [
+      { id: 'OLD', name: 'iPhone 16', os: '18.6' },
+      { id: 'NEW', name: 'iPhone 17', os: '26.5' },
+    ],
+    { env: {}, xcrun: 'xcrun' },
+    new Set(['OLD', 'NEW'])
+  );
+
   assert.equal(selected.id, 'NEW');
+});
+
+test('selects a booted iPhone before a booted non-phone', () => {
+  const selected = selectIosSimulator(
+    [
+      { id: 'IPHONE', name: 'iPhone 16', os: '18.6' },
+      { id: 'IPAD', name: 'iPad Pro', os: '26.5' },
+    ],
+    { env: {}, xcrun: 'xcrun' },
+    new Set(['IPHONE', 'IPAD'])
+  );
+
+  assert.equal(selected.id, 'IPHONE');
+});
+
+test('selects an available iPhone before reusing a booted non-phone', () => {
+  const selected = selectIosSimulator(
+    [
+      { id: 'OLD-IPAD', name: 'iPad Pro', os: '18.6' },
+      { id: 'NEW-IPHONE', name: 'iPhone 17', os: '26.5' },
+    ],
+    { env: {}, xcrun: 'xcrun' },
+    new Set(['OLD-IPAD'])
+  );
+
+  assert.equal(selected.id, 'NEW-IPHONE');
+});
+
+test('reuses a booted non-phone when no iPhone destination is eligible', () => {
+  const selected = selectIosSimulator(
+    [
+      { id: 'OLD-IPAD', name: 'iPad Air', os: '18.6' },
+      { id: 'NEW-IPAD', name: 'iPad Pro', os: '26.5' },
+    ],
+    { env: {}, xcrun: 'xcrun' },
+    new Set(['OLD-IPAD'])
+  );
+
+  assert.equal(selected.id, 'OLD-IPAD');
+});
+
+test('cannot reuse a booted simulator that Xcode excludes for the app', async () => {
+  const environment = { env: {}, xcrun: 'xcrun' };
+  const selected = await ensureEligibleIosSimulator(
+    '/tmp/example/ios',
+    'Example',
+    environment,
+    {
+      inspectRuntimes: () => ['18.6', '26.5'],
+      queryWithRetry: async () => ({
+        destinations: [{ id: 'ELIGIBLE', name: 'iPhone 17', os: '26.5' }],
+        output: '',
+        status: 0,
+      }),
+      selectSimulator: destinations => selectIosSimulator(
+        destinations,
+        environment,
+        new Set(['INELIGIBLE-BOOTED'])
+      ),
+    }
+  );
+
+  assert.equal(selected.id, 'ELIGIBLE');
 });
 
 test('retries an empty Xcode simulator query after warming CoreSimulator', async () => {

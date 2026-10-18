@@ -1005,16 +1005,10 @@ async function ensurePreferredIosSimulatorRuntime(
     );
   }
 
-  // Update approval does not imply first-time installation or cleanup approval.
-  // Coordinated mobile --force passes cleanupObsolete separately.
-  const forcedUpdate = Boolean(current) && options.forceEmulatorUpdates === true;
-  if (forcedUpdate) {
-    log(
-      'Automatically approving the compatible iOS Simulator runtime update '
-      + 'with --force; the download can be several GB.'
-    );
-  }
-  const approved = forcedUpdate || await ask(question);
+  // iOS runtime downloads can be several GB and may change the simulator
+  // hardware Xcode makes available. Keep them explicitly opt-in even when
+  // coordinated mobile --force separately authorizes verified cleanup.
+  const approved = await ask(question);
   if (!approved) {
     if (!current) {
       throw new Error(
@@ -1807,15 +1801,19 @@ function selectIosSimulator(
   const newest = destinations
     .slice()
     .sort((left, right) => compareIosVersions(right.os, left.os));
-  const newestVersion = newest[0] && newest[0].os;
-  const preferred = newest.filter(destination => (
-    compareIosVersions(destination.os, newestVersion) === 0
+  const running = newest.filter(destination => booted.has(destination.id));
+  const runningIphone = running.find(destination => (
+    destination.name.toLowerCase().startsWith('iphone')
   ));
-  return preferred.find(destination => booted.has(destination.id))
-    || preferred.find(destination => (
-      destination.name.toLowerCase().startsWith('iphone')
-    ))
-    || preferred[0]
+  if (runningIphone) {
+    return runningIphone;
+  }
+  const newestIphone = newest.find(destination => (
+    destination.name.toLowerCase().startsWith('iphone')
+  ));
+  return newestIphone
+    || running[0]
+    || newest[0]
     || null;
 }
 
@@ -2132,27 +2130,14 @@ async function prepareIosDevelopment({
   ensureIosPods(iosDir, environment, { outputDir });
   console.log('Checking for an eligible iOS simulator...');
   const nativeName = nativeAppName(outputDir);
-  const directCandidates = availableIosSimulatorDevices(environment);
-  let simulator;
-  if (directCandidates.length > 0) {
-    simulator = selectIosSimulator(
-      directCandidates,
-      environment,
-      new Set(
-        directCandidates
-          .filter(candidate => candidate.state === 'Booted')
-          .map(candidate => candidate.id)
-      )
-    );
-    console.log(`Using ${simulator.name} (iOS ${simulator.os}, ${simulator.id})`);
-  } else {
-    simulator = await ensureEligibleIosSimulator(
-      iosDir,
-      nativeName,
-      environment,
-      { cleanupObsolete }
-    );
-  }
+  // Use Xcode's scheme-specific destinations so a booted simulator below the
+  // app's deployment target cannot be selected from the broader simctl list.
+  const simulator = await ensureEligibleIosSimulator(
+    iosDir,
+    nativeName,
+    environment,
+    { cleanupObsolete }
+  );
   if (cleanupObsolete) {
     // A rejected preferred download or its cooldown must not suppress cleanup
     // once an actually usable replacement has been selected and verified.

@@ -277,11 +277,12 @@ remains available for read-only checks, but OnRamp does not carry that
 user-selected path through `sudo`; it reports the exact manual command instead.
 `doctor` remains read-only and `--force` never accepts the license. The command then checks
 CocoaPods, installs Pods, and asks Apple for the preferred runtime build on
-every launch. When that runtime is missing or newer than the
-installed build, OnRamp offers to download and install it through Xcode before
-selecting a simulator on the newest runtime. Runtime downloads request Apple's
-exact build and explicitly select the host architecture; if that build is not
-downloadable, OnRamp retries Xcode's latest compatible runtime. A failed
+every launch. When that runtime is missing or newer than the installed build,
+OnRamp offers to download and install it through Xcode. It reuses an
+already-booted available iPhone; when none is booted, it selects an iPhone on
+the newest installed runtime. Runtime downloads request Apple's exact build and
+explicitly select the host architecture; if that build is not downloadable,
+OnRamp retries Xcode's latest compatible runtime. A failed
 optional upgrade does not prevent launch when a usable runtime is already
 installed. When Xcode rejects both download forms, OnRamp remembers that exact
 Xcode/preferred/installed build combination for 24 hours instead of repeatedly
@@ -289,16 +290,18 @@ offering it. Changed Xcode or runtime metadata is checked immediately. If Xcode
 itself is missing, OnRamp can open its Mac App Store page
 after asking; Apple still requires the user to complete the Xcode installation.
 
-Add `--force` to `run ios`, `run android`, or `run mobile` to accept emulator
-updates automatically for that run. It covers iOS runtime versions/builds,
-the Android Emulator package, and Android system-image versions/revisions,
-including creating a new AVD required by an image upgrade. Downloads can be
-several GB. It does not skip update checks, force an app rebuild (`--rebuild`),
-or bypass compatibility checks or rejected-download cooldowns. First installs,
-architecture repairs, and display-only replacements still ask for confirmation.
-Xcode-license acceptance, Xcode first-launch setup, and Rosetta installation
-always require separate explicit confirmation; `--force` never accepts software
-licenses.
+Add `--force` to `run ios`, `run android`, or `run mobile` to apply the native
+force policy for that run. Android Emulator package and system-image
+versions/revisions are accepted automatically, including creating a new AVD
+required by an image upgrade. iOS Simulator runtime downloads always remain
+opt-in because they can be several GB and may change the available simulator
+hardware. OnRamp also keeps using an already-booted iPhone instead of silently
+switching it to a device on a newer installed runtime. `--force` does not skip
+update checks, force an app rebuild (`--rebuild`), or bypass compatibility
+checks or rejected-download cooldowns. First installs, architecture repairs,
+and display-only replacements still ask for confirmation. Xcode-license
+acceptance, Xcode first-launch setup, and Rosetta installation always require
+separate explicit confirmation; `--force` never accepts software licenses.
 
 **`run mobile --force` also authorizes permanent cleanup of verified obsolete
 emulator files and saved device data, without another prompt.** After verifying

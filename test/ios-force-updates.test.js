@@ -45,31 +45,33 @@ for (const [description, current] of [
   ['newer version', previous],
   ['preferred build of the same version', { ...preferred, build: '23F77' }],
 ]) {
-  test(`--force approves an iOS ${description} update without prompting`, async () => {
+  test(`--force keeps an iOS ${description} update opt-in`, async () => {
     const h = harness(current);
     const result = await ensurePreferredIosSimulatorRuntime(environment, h.options);
 
-    assert.equal(result.changed, true);
-    assert.deepEqual(h.prompts, []);
-    assert.equal(h.commands.length, 1);
-    assert.deepEqual(h.commands[0].slice(0, 2), [
-      'fake-xcodebuild',
-      ['-downloadPlatform', 'iOS', '-buildVersion', '23F81a', '-architectureVariant', 'arm64'],
-    ]);
-    assert.match(h.logs.join('\n'), /Automatically approving.*--force.*several GB/);
+    assert.equal(result.changed, false);
+    assert.equal(h.prompts.length, 1);
+    assert.equal(h.commands.length, 0);
+    assert.match(h.logs.join('\n'), /Continuing with iOS Simulator runtime/);
   });
 }
 
-test('iOS runtime updates still ask for approval by default', async () => {
+test('an approved iOS runtime update still downloads the preferred build', async () => {
   const h = harness();
-  delete h.options.forceEmulatorUpdates;
+  h.options.promptYesNo = async question => {
+    h.prompts.push(question);
+    return true;
+  };
   const result = await ensurePreferredIosSimulatorRuntime(environment, h.options);
 
-  assert.equal(result.changed, false);
+  assert.equal(result.changed, true);
   assert.equal(h.prompts.length, 1);
   assert.match(h.prompts[0], /Download and install the newer runtime/);
-  assert.equal(h.commands.length, 0);
-  assert.ok(!h.logs.some(message => message.includes('Automatically approving')));
+  assert.equal(h.commands.length, 1);
+  assert.deepEqual(h.commands[0].slice(0, 2), [
+    'fake-xcodebuild',
+    ['-downloadPlatform', 'iOS', '-buildVersion', '23F81a', '-architectureVariant', 'arm64'],
+  ]);
 });
 
 test('--force still requires permission for the first iOS runtime installation', async () => {
@@ -103,6 +105,10 @@ test('--force preserves failed iOS download fallback and the retry cooldown', as
     runtimeDownloadCachePath: path.join(temporary, 'download.json'),
     runtimeDownloadRetryMs: 1_000,
     now: () => now,
+    promptYesNo: async question => {
+      h.prompts.push(question);
+      return true;
+    },
     runCommand: (...args) => {
       h.commands.push(args);
       throw new Error('Xcode rejected the runtime');
@@ -124,7 +130,7 @@ test('--force preserves failed iOS download fallback and the retry cooldown', as
   now += 1_001;
   await ensurePreferredIosSimulatorRuntime(environment, h.options);
   assert.equal(h.commands.length, 4);
-  assert.equal(h.prompts.length, 0);
+  assert.equal(h.prompts.length, 2);
 });
 
 test('--force does not assume availability when iOS compatibility or inventory is unknown', async () => {
@@ -169,12 +175,17 @@ test('--force updates do not autoapprove removing a shared older iOS runtime', a
     },
   });
   h.options.captureFn = (...args) => { removed.push(args); return { status: 0 }; };
+  h.options.promptYesNo = async question => {
+    h.prompts.push(question);
+    return h.prompts.length === 1;
+  };
   const result = await ensurePreferredIosSimulatorRuntime(environment, h.options);
 
   assert.equal(result.changed, true);
   assert.equal(h.commands.length, 1);
-  assert.equal(h.prompts.length, 1);
-  assert.match(h.prompts[0], /shared by all projects and Mac users/);
-  assert.match(h.prompts[0], /Remove.*18\.6/);
+  assert.equal(h.prompts.length, 2);
+  assert.match(h.prompts[0], /Download and install the newer runtime/);
+  assert.match(h.prompts[1], /shared by all projects and Mac users/);
+  assert.match(h.prompts[1], /Remove.*18\.6/);
   assert.deepEqual(removed, []);
 });

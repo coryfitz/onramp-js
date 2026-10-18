@@ -39,7 +39,8 @@ Options:
   --production   Build and run the iOS Release configuration without Metro or a local backend
   --watch-diagnostics  Log source paths that can trigger native Fast Refresh
   --rebuild  Force a fresh native app build instead of reusing an unchanged installation
-  --force   Accept emulator updates; mobile also deletes verified obsolete emulator files/data
+  --force   Accept Android emulator updates; iOS runtime downloads remain opt-in
+            mobile also deletes verified obsolete emulator files/data
             ios/android still ask before cleanup; first installs and repairs remain opt-in
             Xcode and Rosetta setup always require separate license consent
   --fresh   Recreate Podfile.lock during an iOS repair

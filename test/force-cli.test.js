@@ -11,13 +11,14 @@ test('help distinguishes mobile force cleanup from standalone native update cons
   const help = execFileSync(process.execPath, [
     path.join(__dirname, '../bin/onramp-js.js'), '--help',
   ], { encoding: 'utf8' });
+  assert.match(help, /Accept Android emulator updates; iOS runtime downloads remain opt-in/);
   assert.match(help, /mobile also deletes verified obsolete emulator files\/data/);
   assert.match(help, /ios\/android still ask before cleanup/);
   assert.match(help, /first installs and repairs remain opt-in/);
 });
 
 for (const platform of ['ios', 'android', 'mobile']) {
-  test(`--force selects native update consent without forcing app rebuilds for ${platform}`, () => {
+  test(`--force selects the native force policy without forcing app rebuilds for ${platform}`, () => {
     const options = parseRunArgs([platform, '--force']);
     assert.equal(options.forceEmulatorUpdates, true);
     assert.equal(options.cleanupObsolete, undefined);
