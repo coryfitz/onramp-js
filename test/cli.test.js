@@ -418,6 +418,11 @@ test('recognizes only available iOS simulator runtimes', () => {
       {
         identifier: 'com.apple.CoreSimulator.SimRuntime.iOS-18-6',
         isAvailable: true,
+        supportedDeviceTypes: [{
+          identifier: 'com.apple.CoreSimulator.SimDeviceType.iPhone-16-Pro',
+          name: 'iPhone 16 Pro',
+          productFamily: 'iPhone',
+        }],
         version: '18.6',
       },
       {
@@ -442,6 +447,11 @@ test('recognizes only available iOS simulator runtimes', () => {
     [{
       build: null,
       identifier: 'com.apple.CoreSimulator.SimRuntime.iOS-18-6',
+      supportedDeviceTypes: [{
+        identifier: 'com.apple.CoreSimulator.SimDeviceType.iPhone-16-Pro',
+        name: 'iPhone 16 Pro',
+        productFamily: 'iPhone',
+      }],
       version: '18.6',
     }]
   );
@@ -471,9 +481,11 @@ test('reads available iPhone simulator devices without asking Xcode for build se
   }));
 
   assert.deepEqual(devices, [{
+    deviceTypeIdentifier: null,
     id: 'BOOTED-ID',
     name: 'iPhone 17',
     os: '26.5',
+    runtimeIdentifier: 'com.apple.CoreSimulator.SimRuntime.iOS-26-5',
     state: 'Booted',
   }]);
 });
@@ -764,7 +776,7 @@ test('offers the Xcode App Store page when Simulator itself is missing', async (
   ]);
 });
 
-test('keeps using an already-booted iPhone across installed iOS runtimes', () => {
+test('selects a newer conventional iPhone over an older booted iPhone', () => {
   const selected = selectIosSimulator(
     [
       { id: 'OLD', name: 'iPhone 16', os: '18.6' },
@@ -774,7 +786,68 @@ test('keeps using an already-booted iPhone across installed iOS runtimes', () =>
     new Set(['OLD'])
   );
 
-  assert.equal(selected.id, 'OLD');
+  assert.equal(selected.id, 'NEW');
+});
+
+test('prefers a conventional iPhone over a newer Duo destination', () => {
+  const selected = selectIosSimulator(
+    [
+      {
+        deviceTypeIdentifier: 'com.apple.CoreSimulator.SimDeviceType.iPhone-18-Pro',
+        id: 'NORMAL',
+        name: 'Swerve Development',
+        os: '27.0',
+      },
+      {
+        deviceTypeIdentifier: 'com.apple.CoreSimulator.SimDeviceType.iPhone-Duo',
+        id: 'DUO',
+        name: 'Swerve iPhone',
+        os: '27.1',
+      },
+    ],
+    { env: {}, xcrun: 'xcrun' },
+    new Set(['DUO'])
+  );
+
+  assert.equal(selected.id, 'NORMAL');
+});
+
+test('uses Duo only when no conventional iPhone destination exists', () => {
+  const selected = selectIosSimulator(
+    [{
+      deviceTypeIdentifier: 'com.apple.CoreSimulator.SimDeviceType.iPhone-Duo',
+      id: 'DUO',
+      name: 'Swerve iPhone',
+      os: '27.1',
+    }],
+    { env: {}, xcrun: 'xcrun' },
+    new Set(['DUO'])
+  );
+
+  assert.equal(selected.id, 'DUO');
+});
+
+test('does not mistake a renamed iPad for a conventional iPhone', () => {
+  const selected = selectIosSimulator(
+    [
+      {
+        deviceTypeIdentifier: 'com.apple.CoreSimulator.SimDeviceType.iPad-Pro-13-inch-M5',
+        id: 'IPAD',
+        name: 'Swerve iPhone',
+        os: '27.1',
+      },
+      {
+        deviceTypeIdentifier: 'com.apple.CoreSimulator.SimDeviceType.iPhone-18-Pro',
+        id: 'IPHONE',
+        name: 'Swerve Development',
+        os: '27.0',
+      },
+    ],
+    { env: {}, xcrun: 'xcrun' },
+    new Set(['IPAD'])
+  );
+
+  assert.equal(selected.id, 'IPHONE');
 });
 
 test('selects an iPhone on the newest installed iOS runtime when none is booted', () => {
@@ -851,6 +924,9 @@ test('cannot reuse a booted simulator that Xcode excludes for the app', async ()
     environment,
     {
       inspectRuntimes: () => ['18.6', '26.5'],
+      inspectDevices: () => [{
+        id: 'ELIGIBLE', name: 'iPhone 17', os: '26.5', state: 'Shutdown',
+      }],
       queryWithRetry: async () => ({
         destinations: [{ id: 'ELIGIBLE', name: 'iPhone 17', os: '26.5' }],
         output: '',
@@ -865,6 +941,30 @@ test('cannot reuse a booted simulator that Xcode excludes for the app', async ()
   );
 
   assert.equal(selected.id, 'ELIGIBLE');
+});
+
+test('rejects a stale Xcode destination and selects a currently available iPhone', async () => {
+  const selected = await ensureEligibleIosSimulator(
+    '/tmp/example/ios',
+    'Example',
+    { env: {}, xcrun: 'xcrun' },
+    {
+      inspectRuntimes: () => ['18.6', '27.0'],
+      inspectDevices: () => [{
+        id: 'AVAILABLE', name: 'iPhone 16 Pro', os: '18.6', state: 'Booted',
+      }],
+      queryWithRetry: async () => ({
+        destinations: [
+          { id: 'REMOVING', name: 'iPhone 18 Pro', os: '27.0' },
+          { id: 'AVAILABLE', name: 'iPhone 16 Pro', os: '18.6' },
+        ],
+        output: '',
+        status: 0,
+      }),
+    }
+  );
+
+  assert.equal(selected.id, 'AVAILABLE');
 });
 
 test('retries an empty Xcode simulator query after warming CoreSimulator', async () => {
@@ -910,6 +1010,7 @@ test('does not offer a runtime download when iOS runtimes are installed', async 
       {env: {}, xcrun: 'xcrun'},
       {
         inspectRuntimes: () => ['18.6', '26.5'],
+        inspectDevices: () => [],
         queryWithRetry: async () => ({
           destinations: [],
           output: '',
@@ -936,6 +1037,9 @@ test('downloads a missing compatible runtime for the explicit host architecture'
     {
       architectureVariant: 'arm64',
       cleanupRuntimes: async () => [],
+      inspectDevices: () => [{
+        id: 'NEW', name: 'iPhone 17', os: '26.5', state: 'Shutdown',
+      }],
       inspectRuntimes: () => [],
       promptYesNo: async () => true,
       queryWithRetry: async () => {
@@ -1030,6 +1134,74 @@ test('accepts a boot race when CoreSimulator already started the device', () => 
     captureCommand
   ));
   assert.equal(calls.some(args => args[1] === 'bootstatus'), true);
+});
+
+test('bounds simulator boot readiness and reports a clear timeout', () => {
+  let stateChecks = 0;
+  const captureCommand = (_command, args, options) => {
+    if (args[1] === 'list') {
+      stateChecks += 1;
+      assert.equal(options.killSignal, 'SIGKILL');
+      assert.equal(options.timeout, 10);
+      return {
+        status: 0,
+        stdout: JSON.stringify({
+          devices: {
+            runtime: [{
+              isAvailable: true,
+              udid: 'SIMULATOR-ID',
+              state: 'Booting',
+            }],
+          },
+        }),
+        stderr: '',
+      };
+    }
+    if (args[1] === 'bootstatus') {
+      assert.equal(options.killSignal, 'SIGKILL');
+      assert.equal(options.timeout, 25);
+      const error = new Error('timed out');
+      error.code = 'ETIMEDOUT';
+      throw error;
+    }
+    return {status: 0, stdout: '', stderr: ''};
+  };
+
+  assert.throws(
+    () => ensureIosSimulatorBooted(
+      {id: 'SIMULATOR-ID', name: 'iPhone 18 Pro'},
+      {env: {}, xcrun: 'xcrun'},
+      captureCommand,
+      {commandTimeoutMs: 10, timeoutMs: 25}
+    ),
+    /did not finish starting within 1 seconds/
+  );
+  assert.equal(stateChecks, 1);
+});
+
+test('refuses to boot a simulator that became unavailable', () => {
+  const captureCommand = () => ({
+    status: 0,
+    stdout: JSON.stringify({
+      devices: {
+        runtime: [{
+          isAvailable: false,
+          udid: 'SIMULATOR-ID',
+          state: 'Shutdown',
+        }],
+      },
+    }),
+    stderr: '',
+  });
+
+  assert.throws(
+    () => ensureIosSimulatorBooted(
+      {id: 'SIMULATOR-ID', name: 'iPhone 18 Pro'},
+      {env: {}, xcrun: 'xcrun'},
+      captureCommand
+    ),
+    /no longer available/
+  );
 });
 
 test('opens the selected simulator window and explicitly activates it', () => {

@@ -35,7 +35,14 @@ function fixture(t) {
       };
     }),
     runtimes: [old, replacement].map(runtime => ({
-      ...runtime, buildversion: runtime.build, isAvailable: true,
+      ...runtime,
+      buildversion: runtime.build,
+      isAvailable: true,
+      supportedDeviceTypes: [{
+        identifier: 'com.apple.CoreSimulator.SimDeviceType.iPhone-18-Pro',
+        name: 'iPhone 18 Pro',
+        productFamily: 'iPhone',
+      }],
     })),
     devices: {
       [oldRuntime]: [device(3, true), device(4, true)],
@@ -78,6 +85,30 @@ test('mobile forced iOS cleanup deletes old idle devices and absent-runtime data
   assert.equal(f.storage.devices[replacement.identifier].length, 1);
   assert.equal(f.storage.images[0].runtimeIdentifier, replacement.identifier);
   assert.match(f.logs.join('\n'), /lose their saved apps and data/);
+});
+
+test('mobile forced cleanup preserves conventional iPhone support beside a Duo-only runtime', async t => {
+  const f = fixture(t);
+  f.storage.runtimes[0].supportedDeviceTypes = [{
+    identifier: 'com.apple.CoreSimulator.SimDeviceType.iPhone-18-Pro',
+    name: 'iPhone 18 Pro',
+    productFamily: 'iPhone',
+  }];
+  f.storage.runtimes[1].supportedDeviceTypes = [{
+    identifier: 'com.apple.CoreSimulator.SimDeviceType.iPhone-Duo',
+    name: 'iPhone Duo',
+    productFamily: 'iPhone',
+  }];
+  for (const device of f.storage.devices[oldRuntime]) {
+    device.name = 'Swerve Development';
+    device.deviceTypeIdentifier = 'com.apple.CoreSimulator.SimDeviceType.iPhone-18-Pro';
+  }
+  const absentDevice = f.storage.devices[absentRuntime][0];
+  absentDevice.name = 'Swerve Archive';
+  absentDevice.deviceTypeIdentifier = 'com.apple.CoreSimulator.SimDeviceType.iPhone-16-Pro';
+
+  assert.deepEqual(await offerIosRuntimeCleanup(environment, f.options), []);
+  assert.deepEqual(f.calls, []);
 });
 
 test('ordinary ios --force still asks and removes only an approved runtime, not simulator data', async t => {

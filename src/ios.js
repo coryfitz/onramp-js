@@ -27,6 +27,8 @@ const IOS_DESTINATION_QUERY_ATTEMPTS = 3;
 const IOS_DESTINATION_RETRY_DELAY_MS = 500;
 const IOS_RUNTIME_DOWNLOAD_RETRY_MS = 24 * 60 * 60 * 1000;
 const IOS_PASTEBOARD_SYNC_SESSION_SECONDS = 365 * 24 * 60 * 60;
+const IOS_SIMULATOR_COMMAND_TIMEOUT_MS = 10000;
+const IOS_SIMULATOR_BOOT_TIMEOUT_MS = 90000;
 const IOS_SIMULATOR_SHUTDOWN_TIMEOUT_MS = 30000;
 const IOS_SIMULATOR_SHUTDOWN_POLL_MS = 250;
 const SYSTEM_ENV = '/usr/bin/env';
@@ -622,6 +624,25 @@ function queryEligibleIosSimulators(iosDir, nativeName, environment) {
   };
 }
 
+function isStandardIphoneName(name) {
+  const normalized = String(name || '').trim().toLowerCase();
+  return normalized.includes('iphone') && !/\bduo\b/.test(normalized);
+}
+
+function isStandardIphoneDestination(destination) {
+  if (!destination) return false;
+  if (destination.deviceTypeIdentifier) {
+    return isStandardIphoneName(destination.deviceTypeIdentifier);
+  }
+  return isStandardIphoneName(destination.name);
+}
+
+function isAnyIphoneDestination(destination) {
+  if (!destination) return false;
+  const identity = destination.deviceTypeIdentifier || destination.name;
+  return String(identity || '').toLowerCase().includes('iphone');
+}
+
 function parseAvailableIosSimulatorRuntimes(output) {
   const data = JSON.parse(output);
   return (data.runtimes || [])
@@ -633,6 +654,13 @@ function parseAvailableIosSimulatorRuntimes(output) {
     .map(runtime => ({
       build: runtime.buildversion || runtime.buildVersion || null,
       identifier: runtime.identifier,
+      supportedDeviceTypes: Array.isArray(runtime.supportedDeviceTypes)
+        ? runtime.supportedDeviceTypes.map(deviceType => ({
+          identifier: deviceType.identifier || null,
+          name: deviceType.name || null,
+          productFamily: deviceType.productFamily || null,
+        }))
+        : null,
       version: runtime.version || runtime.name || null,
     }))
     .filter(runtime => runtime.version);
@@ -675,14 +703,16 @@ function parseAvailableIosSimulatorDevices(output) {
     const os = match[1].replaceAll('-', '.');
     for (const candidate of candidates) {
       if (
-        candidate.isAvailable !== false
+        candidate.isAvailable === true
         && candidate.udid
         && candidate.name
       ) {
         devices.push({
+          deviceTypeIdentifier: candidate.deviceTypeIdentifier || null,
           id: candidate.udid,
           name: candidate.name,
           os,
+          runtimeIdentifier: runtime,
           state: candidate.state || null,
         });
       }
@@ -695,18 +725,23 @@ function availableIosSimulatorDevices(
   environment,
   captureCommand = capture
 ) {
-  const result = captureCommand(
-    environment.xcrun,
-    ['simctl', 'list', '--json', 'devices', 'available'],
-    { env: environment.env, check: false }
-  );
+  let result;
+  try {
+    result = captureCommand(
+      environment.xcrun,
+      ['simctl', 'list', '--json', 'devices', 'available'],
+      { env: environment.env, check: false }
+    );
+  } catch (_error) {
+    return null;
+  }
   if (result.status !== 0) {
-    return [];
+    return null;
   }
   try {
     return parseAvailableIosSimulatorDevices(result.stdout);
   } catch (_error) {
-    return [];
+    return null;
   }
 }
 
@@ -923,6 +958,9 @@ async function ensurePreferredIosSimulatorRuntime(
   const preferred = findPreferred(environment);
   let installed = inspect(environment);
   const cleanupReplacement = async replacement => {
+    if (options.deferCleanup === true) {
+      return;
+    }
     const removed = await (options.cleanupRuntimes || offerIosRuntimeCleanup)(
       environment,
       { ...options, replacement }
@@ -1203,17 +1241,30 @@ function parseIosSimulatorState(output, simulatorId) {
   for (const devices of Object.values(data.devices || {})) {
     const simulator = devices.find(device => device.udid === simulatorId);
     if (simulator) {
+      if (simulator.isAvailable === false) {
+        return null;
+      }
       return simulator.state || null;
     }
   }
   return null;
 }
 
-function iosSimulatorState(simulatorId, environment, captureCommand = capture) {
+function iosSimulatorState(
+  simulatorId,
+  environment,
+  captureCommand = capture,
+  timeoutMs = IOS_SIMULATOR_COMMAND_TIMEOUT_MS
+) {
   const result = captureCommand(
     environment.xcrun,
     ['simctl', 'list', '--json', 'devices'],
-    { env: environment.env, check: false }
+    {
+      env: environment.env,
+      check: false,
+      killSignal: 'SIGKILL',
+      timeout: timeoutMs,
+    }
   );
   if (result.status !== 0) {
     return null;
@@ -1228,11 +1279,22 @@ function iosSimulatorState(simulatorId, environment, captureCommand = capture) {
 function ensureIosSimulatorBooted(
   simulator,
   environment,
-  captureCommand = capture
+  captureCommand = capture,
+  options = {}
 ) {
-  let state = iosSimulatorState(simulator.id, environment, captureCommand);
+  const timeoutMs = options.timeoutMs ?? IOS_SIMULATOR_BOOT_TIMEOUT_MS;
+  const commandTimeoutMs = options.commandTimeoutMs
+    ?? IOS_SIMULATOR_COMMAND_TIMEOUT_MS;
+  let state = iosSimulatorState(
+    simulator.id,
+    environment,
+    captureCommand,
+    commandTimeoutMs
+  );
   if (!state) {
-    throw new Error(`Could not find the selected iOS simulator (${simulator.id}).`);
+    throw new Error(
+      `The selected iOS simulator is no longer available (${simulator.id}).`
+    );
   }
 
   if (state !== 'Booted' && state !== 'Booting') {
@@ -1240,10 +1302,20 @@ function ensureIosSimulatorBooted(
     const boot = captureCommand(
       environment.xcrun,
       ['simctl', 'boot', simulator.id],
-      { env: environment.env, check: false }
+      {
+        env: environment.env,
+        check: false,
+        killSignal: 'SIGKILL',
+        timeout: commandTimeoutMs,
+      }
     );
     if (boot.status !== 0) {
-      state = iosSimulatorState(simulator.id, environment, captureCommand);
+      state = iosSimulatorState(
+        simulator.id,
+        environment,
+        captureCommand,
+        commandTimeoutMs
+      );
       if (state !== 'Booted' && state !== 'Booting') {
         const detail = (boot.stderr || boot.stdout || '').trim();
         throw new Error(
@@ -1254,11 +1326,57 @@ function ensureIosSimulatorBooted(
     }
   }
 
-  captureCommand(
-    environment.xcrun,
-    ['simctl', 'bootstatus', simulator.id, '-b'],
-    { env: environment.env }
-  );
+  let ready;
+  try {
+    ready = captureCommand(
+      environment.xcrun,
+      ['simctl', 'bootstatus', simulator.id, '-b'],
+      {
+        env: environment.env,
+        check: false,
+        killSignal: 'SIGKILL',
+        timeout: timeoutMs,
+      }
+    );
+  } catch (error) {
+    if (error && error.code === 'ETIMEDOUT') {
+      throw new Error(
+        `${simulator.name} did not finish starting within `
+        + `${Math.max(1, Math.ceil(timeoutMs / 1000))} seconds.`
+      );
+    }
+    state = iosSimulatorState(
+      simulator.id,
+      environment,
+      captureCommand,
+      commandTimeoutMs
+    );
+    if (!state) {
+      throw new Error(
+        `${simulator.name} became unavailable while it was starting.`
+      );
+    }
+    throw error;
+  }
+  if (ready.status !== 0) {
+    state = iosSimulatorState(
+      simulator.id,
+      environment,
+      captureCommand,
+      commandTimeoutMs
+    );
+    const detail = (ready.stderr || ready.stdout || '').trim();
+    if (!state) {
+      throw new Error(
+        `${simulator.name} became unavailable while it was starting`
+        + `${detail ? `: ${detail}` : '.'}`
+      );
+    }
+    throw new Error(
+      `${simulator.name} did not finish starting`
+      + `${detail ? `: ${detail}` : '.'}`
+    );
+  }
   console.log(`✓ ${simulator.name} is ready`);
 }
 
@@ -1801,20 +1919,47 @@ function selectIosSimulator(
   const newest = destinations
     .slice()
     .sort((left, right) => compareIosVersions(right.os, left.os));
+  const standardIphones = newest.filter(destination => (
+    isStandardIphoneDestination(destination)
+  ));
+  if (standardIphones.length > 0) {
+    const newestStandardOs = standardIphones[0].os;
+    const newestStandardIphones = standardIphones.filter(destination => (
+      compareIosVersions(destination.os, newestStandardOs) === 0
+    ));
+    return newestStandardIphones.find(destination => booted.has(destination.id))
+      || newestStandardIphones[0];
+  }
+  // A specialized device such as iPhone Duo remains a last resort for users
+  // who have no conventional phone installed. It must never outrank a normal
+  // iPhone merely because it is booted or belongs to a newer runtime.
   const running = newest.filter(destination => booted.has(destination.id));
   const runningIphone = running.find(destination => (
-    destination.name.toLowerCase().startsWith('iphone')
+    isAnyIphoneDestination(destination)
   ));
-  if (runningIphone) {
-    return runningIphone;
-  }
   const newestIphone = newest.find(destination => (
-    destination.name.toLowerCase().startsWith('iphone')
+    isAnyIphoneDestination(destination)
   ));
-  return newestIphone
+  return runningIphone
+    || newestIphone
     || running[0]
     || newest[0]
     || null;
+}
+
+function reconcileIosSimulatorDestinations(destinations, devices) {
+  if (!Array.isArray(devices)) {
+    return null;
+  }
+  const available = new Map(devices.map(device => [device.id, device]));
+  return destinations
+    .filter(destination => available.has(destination.id))
+    .map(destination => ({
+      ...destination,
+      ...available.get(destination.id),
+      name: destination.name,
+      os: destination.os,
+    }));
 }
 
 async function ensureEligibleIosSimulator(
@@ -1832,6 +1977,7 @@ async function ensureEligibleIosSimulator(
   const askToDownload = options.promptYesNo || promptYesNo;
   const runCommand = options.runCommand || run;
   const selectSimulator = options.selectSimulator || selectIosSimulator;
+  const inspectDevices = options.inspectDevices || availableIosSimulatorDevices;
   const architectureVariant = options.architectureVariant
     || iosRuntimeArchitectureVariant();
   const installedRuntimes = inspectRuntimes(environment);
@@ -1840,10 +1986,43 @@ async function ensureEligibleIosSimulator(
     nativeName,
     environment
   );
-  if (query.destinations.length > 0) {
-    const selected = selectSimulator(query.destinations, environment);
+  let availableDevices = inspectDevices(environment);
+  let reconciled = reconcileIosSimulatorDestinations(
+    query.destinations,
+    availableDevices
+  );
+  if (reconciled === null) {
+    throw new Error(
+      'OnRamp could not verify Xcode\'s available iOS simulators.'
+    );
+  }
+  if (query.destinations.length > 0 && reconciled.length === 0) {
+    console.log(
+      'Xcode\'s simulator inventory changed; refreshing eligible devices...'
+    );
+    query = await queryWithRetry(iosDir, nativeName, environment);
+    availableDevices = inspectDevices(environment);
+    reconciled = reconcileIosSimulatorDestinations(
+      query.destinations,
+      availableDevices
+    );
+    if (reconciled === null) {
+      throw new Error(
+        'OnRamp could not verify Xcode\'s refreshed iOS simulator inventory.'
+      );
+    }
+  }
+  if (reconciled.length > 0) {
+    const selected = selectSimulator(reconciled, environment);
     console.log(`Using ${selected.name} (iOS ${selected.os}, ${selected.id})`);
     return selected;
+  }
+
+  if (query.destinations.length > 0) {
+    throw new Error(
+      'Xcode reported only iOS simulators that are no longer available. '
+      + 'Its device inventory changed during launch; run OnRamp again.'
+    );
   }
 
   const missingVersions = [...query.output.matchAll(
@@ -1900,13 +2079,18 @@ async function ensureEligibleIosSimulator(
     nativeName,
     environment
   );
-  if (query.destinations.length === 0) {
+  availableDevices = inspectDevices(environment);
+  reconciled = reconcileIosSimulatorDestinations(
+    query.destinations,
+    availableDevices
+  );
+  if (reconciled === null || reconciled.length === 0) {
     throw new Error(
       'The runtime download completed, but Xcode still reports no eligible simulator.'
     );
   }
 
-  const selected = selectSimulator(query.destinations, environment);
+  const selected = selectSimulator(reconciled, environment);
   if (installedRuntimes && !installedRuntimes.includes(selected.os)) {
     await (options.cleanupRuntimes || offerIosRuntimeCleanup)(environment, {
       ...options,
@@ -2126,6 +2310,10 @@ async function prepareIosDevelopment({
     cwd: iosDir,
     forceEmulatorUpdates,
     cleanupObsolete,
+    // Select and verify the actual destination first. A newer specialized
+    // runtime (for example, Duo-only) is not a safe replacement for the
+    // conventional iPhone runtime the app will use.
+    deferCleanup: true,
   });
   ensureIosPods(iosDir, environment, { outputDir });
   console.log('Checking for an eligible iOS simulator...');
@@ -2138,11 +2326,13 @@ async function prepareIosDevelopment({
     environment,
     { cleanupObsolete }
   );
-  if (cleanupObsolete) {
-    // A rejected preferred download or its cooldown must not suppress cleanup
-    // once an actually usable replacement has been selected and verified.
-    await offerIosRuntimeCleanup(environment, { cleanupObsolete, simulatorId: simulator.id });
-  }
+  // Cleanup is intentionally deferred until the selected destination is
+  // known. This preserves its runtime while leaving newer specialized
+  // runtimes installed and available for other device families.
+  await offerIosRuntimeCleanup(environment, {
+    cleanupObsolete,
+    simulatorId: simulator.id,
+  });
   const hostKeyboard = await prepareIosHostKeyboard(
     simulator,
     environment,

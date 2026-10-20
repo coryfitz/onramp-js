@@ -23,6 +23,32 @@ function olderVersion(left, right) {
   return false;
 }
 
+function standardIphoneName(name) {
+  const normalized = String(name || '').trim().toLowerCase();
+  return normalized.includes('iphone') && !/\bduo\b/.test(normalized);
+}
+
+function runtimeSupportsStandardIphone(runtime) {
+  if (!runtime || !Array.isArray(runtime.supportedDeviceTypes)) return null;
+  const iphoneTypes = runtime.supportedDeviceTypes.filter(deviceType => (
+    deviceType
+    && deviceType.productFamily === 'iPhone'
+    && (deviceType.identifier || deviceType.name)
+  ));
+  if (iphoneTypes.length === 0) return null;
+  return iphoneTypes.some(deviceType => (
+    standardIphoneName(deviceType.identifier || deviceType.name)
+  ));
+}
+
+function standardIphoneDevice(device) {
+  if (!device) return false;
+  if (device.deviceTypeIdentifier) {
+    return standardIphoneName(device.deviceTypeIdentifier);
+  }
+  return standardIphoneName(device.name);
+}
+
 function inspectIosRuntimeStorage(environment, captureFn = capture) {
   const query = args => {
     const result = captureFn(environment.xcrun, ['simctl', ...args], {
@@ -52,13 +78,20 @@ function verifiedReplacement(storage, replacement, simulatorId) {
   const matches = storage.runtimes.filter(runtime => {
     if (!runtime || runtime.isAvailable !== true || !IOS_RUNTIME.test(runtime.identifier)
         || !VERSION.test(runtime.version)) return false;
-    if (replacement) {
-      return runtime.identifier === replacement.identifier
+    if (replacement && !(
+      runtime.identifier === replacement.identifier
         && runtime.version === replacement.version
-        && (runtime.buildversion || runtime.buildVersion) === replacement.build;
+        && (runtime.buildversion || runtime.buildVersion) === replacement.build
+    )) return false;
+    if (simulatorId) {
+      return (storage.devices[runtime.identifier] || []).some(device => (
+        device
+        && device.udid === simulatorId
+        && device.isAvailable === true
+        && ['Shutdown', 'Booted', 'Booting'].includes(device.state)
+      ));
     }
-    return simulatorId && (storage.devices[runtime.identifier] || [])
-      .some(device => device && device.udid === simulatorId);
+    return Boolean(replacement);
   });
   if (matches.length !== 1) return null;
   const runtime = matches[0];
@@ -73,6 +106,12 @@ function verifiedReplacement(storage, replacement, simulatorId) {
 }
 
 function cleanupCandidates(storage, replacement) {
+  const replacementRuntime = storage.runtimes.find(runtime => (
+    runtime && runtime.identifier === replacement.identifier
+  ));
+  const replacementSupportsStandard = runtimeSupportsStandardIphone(
+    replacementRuntime
+  );
   return storage.images.filter(image => (
     image && UUID.test(image.identifier)
     && image.platformIdentifier === IOS_PLATFORM
@@ -81,6 +120,12 @@ function cleanupCandidates(storage, replacement) {
     && image.deletable === true && image.state === 'Ready'
     && typeof image.build === 'string' && image.build.length > 0
     && olderVersion(image.version, replacement.version)
+    && !(
+      replacementSupportsStandard !== true
+      && runtimeSupportsStandardIphone(storage.runtimes.find(runtime => (
+        runtime && runtime.identifier === image.runtimeIdentifier
+      ))) !== false
+    )
     // simctl deletion would shut down running devices. Only idle images qualify.
     && (storage.devices[image.runtimeIdentifier] || [])
       .every(device => device && device.state === 'Shutdown')
@@ -160,6 +205,12 @@ function obsoleteStorage(storage, replacement, deviceRoot) {
       .every(device => safeDevice(device, deviceRoot))
   ));
   const olderRuntimeIds = new Set(images.map(image => image.runtimeIdentifier));
+  const replacementRuntime = storage.runtimes.find(runtime => (
+    runtime && runtime.identifier === replacement.identifier
+  ));
+  const replacementSupportsStandard = runtimeSupportsStandardIphone(
+    replacementRuntime
+  );
   const devices = [];
   for (const [runtime, group] of Object.entries(storage.devices)) {
     if (!IOS_RUNTIME.test(runtime)) continue;
@@ -167,6 +218,10 @@ function obsoleteStorage(storage, replacement, deviceRoot) {
     const absentOlderRuntime = olderVersion(version, replacement.version)
       && !storage.runtimes.some(installed => installed.identifier === runtime)
       && !storage.images.some(image => image.runtimeIdentifier === runtime)
+      && !(
+        replacementSupportsStandard !== true
+        && group.some(standardIphoneDevice)
+      )
       && group.every(device => device.isAvailable === false && safeDevice(device, deviceRoot));
     if (olderRuntimeIds.has(runtime) || absentOlderRuntime) {
       for (const device of group) devices.push({ ...device, runtime });
@@ -189,7 +244,8 @@ function removeObsoleteIosStorage(environment, options, inspect, captureFn, log,
 
   for (const candidate of candidates.devices) {
     const current = inspect();
-    if (!unambiguousStorage(current) || !verifiedReplacement(current, replacement)) break;
+    if (!unambiguousStorage(current)
+        || !verifiedReplacement(current, replacement, options.simulatorId)) break;
     const safe = obsoleteStorage(current, replacement, deviceRoot).devices.find(device => (
       device.udid === candidate.udid && device.runtime === candidate.runtime
       && device.dataPath === candidate.dataPath
@@ -216,7 +272,8 @@ function removeObsoleteIosStorage(environment, options, inspect, captureFn, log,
 
   for (const candidate of candidates.images) {
     const current = inspect();
-    if (!unambiguousStorage(current) || !verifiedReplacement(current, replacement)) break;
+    if (!unambiguousStorage(current)
+        || !verifiedReplacement(current, replacement, options.simulatorId)) break;
     const safe = obsoleteStorage(current, replacement, deviceRoot).images.find(image => (
       image.identifier === candidate.identifier && image.runtimeIdentifier === candidate.runtimeIdentifier
       && image.version === candidate.version && image.build === candidate.build
@@ -280,7 +337,7 @@ async function offerIosRuntimeCleanup(environment, options = {}) {
     for (const candidate of candidates) {
       // Recheck after user input and each deletion to protect active devices.
       const current = inspect();
-      if (!verifiedReplacement(current, replacement)) break;
+      if (!verifiedReplacement(current, replacement, options.simulatorId)) break;
       const safe = cleanupCandidates(current, replacement).find(image => (
         image.identifier === candidate.identifier
         && image.runtimeIdentifier === candidate.runtimeIdentifier

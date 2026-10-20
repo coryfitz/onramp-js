@@ -74,3 +74,14 @@ test('reports quiet asynchronous command failures with their output', async () =
     /exited with status 7: native failure/
   );
 });
+
+test('capture forwards a bounded timeout to synchronous child commands', () => {
+  assert.throws(
+    () => capture(
+      process.execPath,
+      ['-e', 'setTimeout(() => {}, 1000)'],
+      { timeout: 25 }
+    ),
+    error => error && error.code === 'ETIMEDOUT'
+  );
+});

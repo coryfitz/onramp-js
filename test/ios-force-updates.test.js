@@ -15,11 +15,21 @@ const previous = {
   identifier: 'com.apple.CoreSimulator.SimRuntime.iOS-18-6',
   build: '22G86',
   version: '18.6',
+  supportedDeviceTypes: [{
+    identifier: 'com.apple.CoreSimulator.SimDeviceType.iPhone-16-Pro',
+    name: 'iPhone 16 Pro',
+    productFamily: 'iPhone',
+  }],
 };
 const preferred = {
   identifier: 'com.apple.CoreSimulator.SimRuntime.iOS-26-5',
   build: '23F81a',
   version: '26.5',
+  supportedDeviceTypes: [{
+    identifier: 'com.apple.CoreSimulator.SimDeviceType.iPhone-17',
+    name: 'iPhone 17',
+    productFamily: 'iPhone',
+  }],
 };
 
 function harness(current = previous) {

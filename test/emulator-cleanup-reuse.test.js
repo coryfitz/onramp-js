@@ -11,10 +11,20 @@ function iosFixture() {
   const previous = {
     identifier: 'com.apple.CoreSimulator.SimRuntime.iOS-18-6',
     version: '18.6', build: '22G86',
+    supportedDeviceTypes: [{
+      identifier: 'com.apple.CoreSimulator.SimDeviceType.iPhone-16-Pro',
+      name: 'iPhone 16 Pro',
+      productFamily: 'iPhone',
+    }],
   };
   const replacement = {
     identifier: 'com.apple.CoreSimulator.SimRuntime.iOS-26-5',
     version: '26.5', build: '23F77',
+    supportedDeviceTypes: [{
+      identifier: 'com.apple.CoreSimulator.SimDeviceType.iPhone-17',
+      name: 'iPhone 17',
+      productFamily: 'iPhone',
+    }],
   };
   const runtimes = [previous, replacement];
   const oldId = '11111111-1111-1111-1111-111111111111';

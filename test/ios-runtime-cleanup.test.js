@@ -35,12 +35,33 @@ function inventory() {
       },
     ],
     runtimes: [
-      { identifier: oldRuntime, version: '18.6', buildversion: '22G86', isAvailable: true },
-      { ...replacement, buildversion: replacement.build, isAvailable: true },
+      {
+        identifier: oldRuntime,
+        version: '18.6',
+        buildversion: '22G86',
+        isAvailable: true,
+        supportedDeviceTypes: [{
+          identifier: 'com.apple.CoreSimulator.SimDeviceType.iPhone-16-Pro',
+          name: 'iPhone 16 Pro',
+          productFamily: 'iPhone',
+        }],
+      },
+      {
+        ...replacement,
+        buildversion: replacement.build,
+        isAvailable: true,
+        supportedDeviceTypes: [{
+          identifier: 'com.apple.CoreSimulator.SimDeviceType.iPhone-18-Pro',
+          name: 'iPhone 18 Pro',
+          productFamily: 'iPhone',
+        }],
+      },
     ],
     devices: {
       [oldRuntime]: [{ udid: 'old-device', state: 'Shutdown' }],
-      [replacement.identifier]: [{ udid: 'new-device', state: 'Booted' }],
+      [replacement.identifier]: [{
+        udid: 'new-device', state: 'Booted', isAvailable: true,
+      }],
     },
   };
 }
@@ -80,6 +101,43 @@ test('does not remove runtimes when cleanup is declined', async () => {
   const h = harness();
   h.options.promptYesNo = async () => false;
   assert.deepEqual(await offerIosRuntimeCleanup(environment, h.options), []);
+  assert.equal(h.calls.length, 0);
+});
+
+test('keeps an older conventional-iPhone runtime when replacement is Duo-only', async () => {
+  const h = harness();
+  h.storage.runtimes[0].supportedDeviceTypes = [{
+    identifier: 'com.apple.CoreSimulator.SimDeviceType.iPhone-18-Pro',
+    name: 'iPhone 18 Pro',
+    productFamily: 'iPhone',
+  }];
+  h.storage.runtimes[1].supportedDeviceTypes = [{
+    identifier: 'com.apple.CoreSimulator.SimDeviceType.iPhone-Duo',
+    name: 'iPhone Duo',
+    productFamily: 'iPhone',
+  }];
+
+  assert.deepEqual(await offerIosRuntimeCleanup(environment, h.options), []);
+  assert.equal(h.prompts.length, 0);
+  assert.equal(h.calls.length, 0);
+});
+
+test('keeps an older conventional-iPhone runtime when replacement device metadata is unknown', async () => {
+  const h = harness();
+  delete h.storage.runtimes[1].supportedDeviceTypes;
+
+  assert.deepEqual(await offerIosRuntimeCleanup(environment, h.options), []);
+  assert.equal(h.prompts.length, 0);
+  assert.equal(h.calls.length, 0);
+});
+
+test('keeps older runtime when both device-type inventories are unknown', async () => {
+  const h = harness();
+  delete h.storage.runtimes[0].supportedDeviceTypes;
+  delete h.storage.runtimes[1].supportedDeviceTypes;
+
+  assert.deepEqual(await offerIosRuntimeCleanup(environment, h.options), []);
+  assert.equal(h.prompts.length, 0);
   assert.equal(h.calls.length, 0);
 });
 
@@ -167,6 +225,20 @@ test('does not mistake reordered existing builds for a successful new download',
   assert.equal(cleanups, 0);
 });
 
+test('can defer runtime cleanup until an eligible simulator is selected', async () => {
+  let cleanups = 0;
+  await ensurePreferredIosSimulatorRuntime(environment, {
+    deferCleanup: true,
+    inspectRuntimes: () => [replacement],
+    preferredRuntime: () => replacement,
+    cleanupRuntimes: async () => { cleanups += 1; },
+    log: () => {},
+    runtimeDownloadCachePath: null,
+  });
+
+  assert.equal(cleanups, 0);
+});
+
 test('cleanup errors do not fail launch or falsely report reclaimed storage', async () => {
   for (const response of [{ status: 1 }, { status: 0 }]) {
     const h = harness();
@@ -181,6 +253,28 @@ test('resolves the verified replacement from a selected eligible simulator', asy
   delete h.options.replacement;
   h.options.simulatorId = 'new-device';
   assert.deepEqual(await offerIosRuntimeCleanup(environment, h.options), [oldId]);
+});
+
+test('selected simulator must remain explicitly available throughout cleanup', async () => {
+  for (const change of [
+    device => { device.isAvailable = false; },
+    device => { device.state = 'Shutting Down'; },
+  ]) {
+    const h = harness();
+    delete h.options.replacement;
+    h.options.simulatorId = 'new-device';
+    let inspections = 0;
+    h.options.inspectStorage = () => {
+      inspections += 1;
+      if (inspections > 1) {
+        change(h.storage.devices[replacement.identifier][0]);
+      }
+      return structuredClone(h.storage);
+    };
+
+    assert.deepEqual(await offerIosRuntimeCleanup(environment, h.options), []);
+    assert.equal(h.calls.length, 0);
+  }
 });
 
 test('runtime inventory fails closed on provider errors and malformed schemas', () => {
@@ -243,6 +337,9 @@ test('eligible simulator recovery offers cleanup only for a newly available vers
     const cleanups = [];
     await ensureEligibleIosSimulator('/fake/ios', 'Example', environment, {
       inspectRuntimes: () => before,
+      inspectDevices: () => [{
+        id: 'new-device', name: 'iPhone', os: '26.5', state: 'Shutdown',
+      }],
       queryWithRetry: async () => ++queries === 1
         ? { status: 1, destinations: [], output: 'iOS 26.5 is not installed' }
         : { status: 0, destinations: [{ id: 'new-device', name: 'iPhone', os: '26.5' }], output: '' },

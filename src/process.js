@@ -58,10 +58,12 @@ function capture(command, args, options = {}) {
   const result = spawnSync(command, args, {
     cwd: options.cwd,
     env: childEnvironment(options.env || process.env),
+    killSignal: options.killSignal || 'SIGTERM',
     shell: false,
     encoding: 'utf8',
     input: options.input,
     stdio: [options.input === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'],
+    timeout: options.timeout,
   });
 
   if (result.error) {
