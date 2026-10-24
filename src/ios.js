@@ -27,6 +27,8 @@ const IOS_DESTINATION_QUERY_ATTEMPTS = 3;
 const IOS_DESTINATION_RETRY_DELAY_MS = 500;
 const IOS_RUNTIME_DOWNLOAD_RETRY_MS = 24 * 60 * 60 * 1000;
 const IOS_PASTEBOARD_SYNC_SESSION_SECONDS = 365 * 24 * 60 * 60;
+const IOS_PASTEBOARD_SYNC_RETRY_DELAYS_MS = [1000, 2000, 5000, 10000, 30000];
+const IOS_PASTEBOARD_SYNC_STABLE_MS = 30000;
 const IOS_SIMULATOR_COMMAND_TIMEOUT_MS = 10000;
 const IOS_SIMULATOR_BOOT_TIMEOUT_MS = 90000;
 const IOS_SIMULATOR_SHUTDOWN_TIMEOUT_MS = 30000;
@@ -1773,6 +1775,12 @@ function startIosPasteboardSync(
   const spawnCommand = options.spawnCommand || spawn;
   const warn = options.warn || console.warn;
   const log = options.log || console.log;
+  const now = options.now || Date.now;
+  const scheduleRetry = options.scheduleRetry || setTimeout;
+  const cancelRetry = options.cancelRetry || clearTimeout;
+  const retryDelaysMs = options.retryDelaysMs
+    || IOS_PASTEBOARD_SYNC_RETRY_DELAYS_MS;
+  const stableMs = options.stableMs ?? IOS_PASTEBOARD_SYNC_STABLE_MS;
   const sessionSeconds = options.sessionSeconds
     || IOS_PASTEBOARD_SYNC_SESSION_SECONDS;
   const reportUnavailable = detail => {
@@ -1783,92 +1791,192 @@ function startIosPasteboardSync(
     );
     return null;
   };
-  let info;
-  try {
-    info = captureCommand(
-      environment.xcrun,
-      [
-        'devicectl',
-        'device',
-        'pasteboard',
-        'info',
-        '--device',
-        simulator.id,
-        '--timeout',
-        '5',
-        '--quiet',
-      ],
-      { env: environment.env, check: false }
-    );
-  } catch (error) {
-    return reportUnavailable(error.message);
-  }
-  if (info.status !== 0) {
-    return reportUnavailable((info.stderr || info.stdout || '').trim());
-  }
-
-  let child;
-  try {
-    child = spawnCommand(
-      environment.xcrun,
-      [
-        'devicectl',
-        'device',
-        'pasteboard',
-        'sync-with-host',
-        '--device',
-        simulator.id,
-        '--session-timeout',
-        String(sessionSeconds),
-        '--timeout',
-        String(sessionSeconds + 1),
-        '--quiet',
-      ],
-      {
-        env: childEnvironment(environment.env),
-        shell: false,
-        stdio: ['ignore', 'ignore', 'pipe'],
+  const inspectPasteboard = () => {
+    try {
+      const info = captureCommand(
+        environment.xcrun,
+        [
+          'devicectl',
+          'device',
+          'pasteboard',
+          'info',
+          '--device',
+          simulator.id,
+          '--timeout',
+          '5',
+          '--quiet',
+        ],
+        { env: environment.env, check: false }
+      );
+      if (info.status === 0) {
+        return '';
       }
-    );
-  } catch (error) {
-    return reportUnavailable(error.message);
-  }
+      return (info.stderr || info.stdout || '').trim()
+        || 'the simulator pasteboard is unavailable';
+    } catch (error) {
+      return error.message;
+    }
+  };
+
+  let child = null;
+  let retryTimer = null;
+  let retryAttempt = 0;
   let stopped = false;
-  let failure = '';
-  if (child.stderr) {
-    child.stderr.on('data', chunk => {
-      failure = `${failure}${chunk}`.slice(-4096);
-    });
-  }
-  const stop = signal => {
-    if (stopped || child.exitCode !== null) {
+  let outageReported = false;
+  let recoveryReported = false;
+  let lastStartFailure = '';
+  let resolveCompletion;
+  const completion = new Promise(resolve => {
+    resolveCompletion = resolve;
+  });
+
+  const retryDelay = () => retryDelaysMs[
+    Math.min(retryAttempt, retryDelaysMs.length - 1)
+  ];
+
+  const scheduleRestart = detail => {
+    if (stopped || retryTimer !== null) {
       return;
     }
-    stopped = true;
-    child.kill(signal || 'SIGTERM');
-  };
-  child.once('error', error => {
-    if (!stopped) {
+    if (!outageReported) {
+      outageReported = true;
+      recoveryReported = false;
+      const detailSuffix = detail
+        ? `: ${detail}${/[.!?]$/.test(detail) ? '' : '.'}`
+        : '.';
       warn(
-        `Warning: iOS clipboard sharing could not start for ${simulator.name}: `
-        + error.message
+        `Warning: iOS clipboard sharing was interrupted for ${simulator.name}`
+        + `${detailSuffix} Reconnecting automatically.`
       );
     }
-  });
-  child.once('exit', (code, signal) => {
+    const delayMs = retryDelay();
+    retryAttempt += 1;
+    retryTimer = scheduleRetry(() => {
+      retryTimer = null;
+      startChild();
+    }, delayMs);
+  };
+
+  const startChild = ({ scheduleOnFailure = true } = {}) => {
+    if (stopped) {
+      return false;
+    }
+    const inspectionFailure = inspectPasteboard();
+    if (inspectionFailure) {
+      lastStartFailure = inspectionFailure;
+      if (scheduleOnFailure) {
+        scheduleRestart(inspectionFailure);
+      }
+      return false;
+    }
+
+    let nextChild;
+    try {
+      nextChild = spawnCommand(
+        environment.xcrun,
+        [
+          'devicectl',
+          'device',
+          'pasteboard',
+          'sync-with-host',
+          '--device',
+          simulator.id,
+          '--session-timeout',
+          String(sessionSeconds),
+          '--timeout',
+          String(sessionSeconds + 1),
+          '--quiet',
+        ],
+        {
+          env: childEnvironment(environment.env),
+          shell: false,
+          stdio: ['ignore', 'ignore', 'pipe'],
+        }
+      );
+    } catch (error) {
+      lastStartFailure = error.message;
+      if (scheduleOnFailure) {
+        scheduleRestart(error.message);
+      }
+      return false;
+    }
+
+    child = nextChild;
+    const startedAt = now();
+    let ended = false;
+    let failure = '';
+    if (nextChild.stderr) {
+      nextChild.stderr.on('data', chunk => {
+        failure = `${failure}${chunk}`.slice(-4096);
+      });
+    }
+    const handleEnd = detail => {
+      if (ended) {
+        return;
+      }
+      ended = true;
+      if (child === nextChild) {
+        child = null;
+      }
+      if (stopped) {
+        return;
+      }
+      if (now() - startedAt >= stableMs) {
+        retryAttempt = 0;
+        outageReported = false;
+        recoveryReported = false;
+      }
+      scheduleRestart(detail || failure.trim());
+    };
+    nextChild.once('error', error => {
+      handleEnd(error.message);
+    });
+    nextChild.once('exit', (code, signal) => {
+      const detail = failure.trim()
+        || `${code !== null ? `status ${code}` : 'the process ended'}`
+          + `${signal ? ` after signal ${signal}` : ''}`;
+      handleEnd(detail);
+    });
+
+    if (outageReported && !recoveryReported) {
+      recoveryReported = true;
+      log(`✓ Mac and ${simulator.name} clipboards are synchronized again`);
+    } else if (!outageReported) {
+      log(`✓ Mac and ${simulator.name} clipboards are synchronized`);
+    }
+    return true;
+  };
+
+  const stop = signal => {
     if (stopped) {
       return;
     }
-    const detail = failure.trim();
-    warn(
-      `Warning: iOS clipboard sharing stopped unexpectedly for ${simulator.name}`
-      + `${code !== null ? ` with status ${code}` : ''}`
-      + `${signal ? ` after signal ${signal}` : ''}`
-      + `${detail ? `: ${detail}` : '.'}`
+    stopped = true;
+    if (retryTimer !== null) {
+      cancelRetry(retryTimer);
+      retryTimer = null;
+    }
+    const activeChild = child;
+    child = null;
+    if (activeChild && activeChild.exitCode === null) {
+      activeChild.kill(signal || 'SIGTERM');
+    }
+    resolveCompletion();
+  };
+  const controller = {
+    completion,
+    get child() {
+      return child;
+    },
+    stop,
+  };
+  if (!startChild({ scheduleOnFailure: false })) {
+    stop();
+    return reportUnavailable(
+      lastStartFailure || 'the pasteboard synchronization process did not start'
     );
-  });
-  log(`✓ Mac and ${simulator.name} clipboards are synchronized`);
-  return { child, stop };
+  }
+  return controller;
 }
 
 function attachIosPasteboardSync(metro, pasteboardSync) {
@@ -1886,28 +1994,29 @@ function attachIosPasteboardSync(metro, pasteboardSync) {
 }
 
 function waitForIosProductionPasteboardSync(pasteboardSync, signalEmitter = process) {
-  if (!pasteboardSync?.child || pasteboardSync.child.exitCode !== null) {
+  if (!pasteboardSync?.completion || typeof pasteboardSync.stop !== 'function') {
     return Promise.resolve();
   }
   return new Promise(resolve => {
+    let finished = false;
     const finish = signal => {
+      if (finished) {
+        return;
+      }
+      finished = true;
       signalEmitter.removeListener('SIGINT', onInterrupt);
       signalEmitter.removeListener('SIGTERM', onTerminate);
       signalEmitter.removeListener('SIGHUP', onHangup);
-      pasteboardSync.child.removeListener('exit', onExit);
-      pasteboardSync.child.removeListener('error', onExit);
       if (signal) pasteboardSync.stop(signal);
       resolve();
     };
     const onInterrupt = () => finish('SIGINT');
     const onTerminate = () => finish('SIGTERM');
     const onHangup = () => finish('SIGHUP');
-    const onExit = () => finish();
     signalEmitter.once('SIGINT', onInterrupt);
     signalEmitter.once('SIGTERM', onTerminate);
     signalEmitter.once('SIGHUP', onHangup);
-    pasteboardSync.child.once('exit', onExit);
-    pasteboardSync.child.once('error', onExit);
+    pasteboardSync.completion.then(() => finish(), () => finish());
   });
 }
 

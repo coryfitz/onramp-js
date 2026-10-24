@@ -113,23 +113,131 @@ test('does not start clipboard sync when Device Hub cannot access the simulator'
   assert.match(warnings[0], /Reopen the selected simulator in Device Hub/);
 });
 
-test('reports an unexpected clipboard sync exit without exposing normal output', () => {
+test('restarts clipboard synchronization after an unexpected clean relay exit', () => {
   const warnings = [];
+  const logs = [];
+  const timers = [];
+  const children = [fakeChild(), fakeChild()];
+  let spawnIndex = 0;
+  const sync = startIosPasteboardSync(simulator, environment, {
+    captureCommand: () => ({status: 0, stdout: '', stderr: ''}),
+    log: message => logs.push(message),
+    retryDelaysMs: [100, 200],
+    scheduleRetry: (callback, delay) => {
+      const timer = {callback, delay};
+      timers.push(timer);
+      return timer;
+    },
+    spawnCommand: () => children[spawnIndex++],
+    warn: message => warnings.push(message),
+  });
+
+  children[0].emit('exit', 0, null);
+
+  assert.deepEqual(warnings, [
+    'Warning: iOS clipboard sharing was interrupted for iPhone 18 Pro: '
+      + 'status 0. Reconnecting automatically.',
+  ]);
+  assert.equal(timers.length, 1);
+  assert.equal(timers[0].delay, 100);
+  assert.equal(sync.child, null);
+
+  timers[0].callback();
+  assert.equal(sync.child, children[1]);
+  assert.deepEqual(logs, [
+    '✓ Mac and iPhone 18 Pro clipboards are synchronized',
+    '✓ Mac and iPhone 18 Pro clipboards are synchronized again',
+  ]);
+});
+
+test('backs off while a disconnected simulator is unavailable, then recovers', () => {
+  const warnings = [];
+  const logs = [];
+  const timers = [];
+  const children = [fakeChild(), fakeChild()];
+  const inspections = [
+    {status: 0, stdout: '', stderr: ''},
+    {status: 1, stdout: '', stderr: 'The device is unavailable'},
+    {status: 0, stdout: '', stderr: ''},
+  ];
+  let spawnIndex = 0;
+  const sync = startIosPasteboardSync(simulator, environment, {
+    captureCommand: () => inspections.shift(),
+    log: message => logs.push(message),
+    retryDelaysMs: [100, 200],
+    scheduleRetry: (callback, delay) => {
+      const timer = {callback, delay};
+      timers.push(timer);
+      return timer;
+    },
+    spawnCommand: () => children[spawnIndex++],
+    warn: message => warnings.push(message),
+  });
+
+  children[0].emit('exit', 1, null);
+  assert.equal(timers[0].delay, 100);
+  timers[0].callback();
+  assert.equal(timers[1].delay, 200);
+  assert.equal(sync.child, null);
+  timers[1].callback();
+
+  assert.equal(sync.child, children[1]);
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /Reconnecting automatically/);
+  assert.deepEqual(logs, [
+    '✓ Mac and iPhone 18 Pro clipboards are synchronized',
+    '✓ Mac and iPhone 18 Pro clipboards are synchronized again',
+  ]);
+});
+
+test('does not schedule duplicate restarts when one child errors and exits', () => {
+  const timers = [];
   const child = fakeChild();
   startIosPasteboardSync(simulator, environment, {
     captureCommand: () => ({status: 0, stdout: '', stderr: ''}),
     log: () => {},
+    scheduleRetry: (callback, delay) => {
+      const timer = {callback, delay};
+      timers.push(timer);
+      return timer;
+    },
     spawnCommand: () => child,
-    warn: message => warnings.push(message),
+    warn: () => {},
   });
 
-  child.stderr.emit('data', Buffer.from('connection failed'));
+  child.emit('error', new Error('connection failed'));
   child.emit('exit', 1, null);
+  assert.equal(timers.length, 1);
+});
 
-  assert.deepEqual(warnings, [
-    'Warning: iOS clipboard sharing stopped unexpectedly for iPhone 18 Pro '
-      + 'with status 1: connection failed',
-  ]);
+test('stopping during reconnect backoff cancels the retry and completes the session', async () => {
+  const timers = [];
+  const cancelled = [];
+  const child = fakeChild();
+  let spawnCount = 0;
+  const sync = startIosPasteboardSync(simulator, environment, {
+    cancelRetry: timer => cancelled.push(timer),
+    captureCommand: () => ({status: 0, stdout: '', stderr: ''}),
+    log: () => {},
+    scheduleRetry: (callback, delay) => {
+      const timer = {callback, delay};
+      timers.push(timer);
+      return timer;
+    },
+    spawnCommand: () => {
+      spawnCount += 1;
+      return child;
+    },
+    warn: () => {},
+  });
+
+  child.emit('exit', 1, null);
+  sync.stop('SIGTERM');
+  await sync.completion;
+
+  assert.deepEqual(cancelled, [timers[0]]);
+  timers[0].callback();
+  assert.equal(spawnCount, 1);
 });
 
 test('stops clipboard sync with Metro whether Metro is stopped or exits', async t => {

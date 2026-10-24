@@ -91,10 +91,15 @@ test('a production iOS run remains usable when clipboard sync is unavailable', a
 
 test('the production clipboard session stays open until interrupted and stops only its sync', async () => {
   const signals = new EventEmitter();
-  const child = new EventEmitter();
-  child.exitCode = null;
   const stopped = [];
-  const pasteboardSync = { child, stop: signal => stopped.push(signal) };
+  let complete;
+  const pasteboardSync = {
+    completion: new Promise(resolve => { complete = resolve; }),
+    stop: signal => {
+      stopped.push(signal);
+      complete();
+    },
+  };
   let finished = false;
   const session = waitForIosProductionPasteboardSync(pasteboardSync, signals)
     .then(() => { finished = true; });
@@ -107,21 +112,29 @@ test('the production clipboard session stays open until interrupted and stops on
   assert.equal(signals.listenerCount('SIGINT'), 0);
   assert.equal(signals.listenerCount('SIGTERM'), 0);
   assert.equal(signals.listenerCount('SIGHUP'), 0);
-  assert.equal(child.listenerCount('exit'), 0);
 });
 
-test('an unexpectedly ended production clipboard sync releases its signal handlers', async () => {
+test('the production wait follows the supervised session instead of one relay child', async () => {
   const signals = new EventEmitter();
   const child = new EventEmitter();
   child.exitCode = null;
-  const stopped = [];
-  const session = waitForIosProductionPasteboardSync({
+  let complete;
+  let finished = false;
+  const pasteboardSync = {
     child,
-    stop: signal => stopped.push(signal),
-  }, signals);
+    completion: new Promise(resolve => { complete = resolve; }),
+    stop: () => {},
+  };
+  const session = waitForIosProductionPasteboardSync(pasteboardSync, signals)
+    .then(() => { finished = true; });
+
   child.emit('exit', 1);
+  await Promise.resolve();
+  assert.equal(finished, false);
+  assert.equal(signals.listenerCount('SIGINT'), 1);
+
+  complete();
   await session;
-  assert.deepEqual(stopped, []);
   assert.equal(signals.listenerCount('SIGINT'), 0);
   assert.equal(signals.listenerCount('SIGTERM'), 0);
   assert.equal(signals.listenerCount('SIGHUP'), 0);

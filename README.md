@@ -58,9 +58,11 @@ does not archive, sign for distribution, or upload to TestFlight. The older
 `run ios --environment production` form uses the same Release behavior.
 With Xcode Device Hub, leave the command open to synchronize the Mac and exact
 simulator clipboards; Ctrl+C stops sharing without uninstalling the app. OnRamp
-does not read or log clipboard contents. The Release launcher reconnects the
-selected simulator before building when Device Hub's hardware-keyboard default
-is enabled, so a stale connection cannot silently keep its old keyboard mode.
+automatically reconnects the private pasteboard relay after transient Device
+Hub or simulator interruptions and does not read or log clipboard contents. The
+Release launcher reconnects the selected simulator before building when Device
+Hub's hardware-keyboard default is enabled, so a stale connection cannot
+silently keep its old keyboard mode.
 If macOS blocks the preference or the connection cannot be verified, the
 launcher repeats the exact Device Hub keyboard menu to use after the build.
 The framework-owned entrypoints register that generated profile before the app
@@ -247,8 +249,9 @@ effect, without wiping its installed apps or data. AVDs outside that namespace
 and ambiguous metadata are left unchanged with manual keyboard guidance.
 When Xcode Device Hub opens an iOS simulator, OnRamp also starts Apple's
 bidirectional pasteboard synchronization for that exact device. The sync stays
-private to the Mac and simulator, never prints clipboard contents, and stops
-with the project's Metro server.
+private to the Mac and simulator, never prints clipboard contents, reconnects
+after transient Device Hub or simulator interruptions, and stops with the
+project's Metro server.
 On macOS, Metro uses its native file watcher. Cloud sync, indexing, and similar
 services can still emit metadata-only dependency events even though no module
 contents changed. OnRamp lets Metro calculate each delta, suppresses only HMR
